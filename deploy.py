@@ -17,7 +17,8 @@ import sys
 MOD_ID = "easy_language_packs"
 ROOT = os.path.dirname(os.path.abspath(__file__))
 # repository files that are tooling, not part of the mod
-NOT_SHIPPED = (".github/", "tests/", "deploy.py", ".gitattributes", ".gitignore")
+NOT_SHIPPED = (".github/", "tests/", "deploy.py", "CLAUDE.md", ".gitattributes", ".gitignore",
+               "workflows-to-install/")
 
 
 def mod_files():

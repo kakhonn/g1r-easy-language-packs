@@ -5,6 +5,9 @@ is written from synthetic records, so neither the engine nor any ROM is needed.
 """
 import contextlib
 import csv
+import http.server
+import threading
+import zipfile
 import io
 import json
 import os
@@ -275,6 +278,92 @@ class Split(unittest.TestCase):
             w.writeheader()
             w.writerows(data)
         self.assertEqual(quiet(lpk.main, ["check", self.out]), 1)
+
+
+class EngineDownload(unittest.TestCase):
+    """A release build has no src/: lpk.py fetches G1R's source zip once and
+    caches it.  A local server stands in for GitHub."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.game = os.path.join(self.tmp, "game")
+        make_install(self.game)
+        shutil.rmtree(os.path.join(self.game, "src"))  # like a release build
+        # the archive GitHub serves for a tag
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w") as zf:
+            zf.writestr("gen1recomp-0.3.89/src/core/Strings.lua", "return {}\n")
+            zf.writestr("gen1recomp-0.3.89/src/ui/Menu.lua", 'local S = Strings("CONTINUE")\n')
+            zf.writestr("gen1recomp-0.3.89/src/battle/Status.lua",
+                        'Status.RECORDS = { PSN = { id = "PSN", label = "PSN" } }\n')
+            zf.writestr("gen1recomp-0.3.89/assets/big.png", "x" * 1000)
+            zf.writestr("gen1recomp-0.3.89/src/../../escape.lua", "bad\n")
+        self.zipdata = buf.getvalue()
+        self.hits = []
+        test = self
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):
+                test.hits.append(self.path)
+                if self.path.endswith("/releases/latest"):
+                    body = json.dumps({"tag_name": "v0.3.89"}).encode()
+                elif self.path.endswith("/archive/refs/tags/v0.3.89.zip"):
+                    body = test.zipdata
+                else:
+                    self.send_response(404)
+                    self.end_headers()
+                    return
+                self.send_response(200)
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, *a):
+                pass
+
+        self.server = http.server.HTTPServer(("127.0.0.1", 0), Handler)
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+        base = f"http://127.0.0.1:{self.server.server_port}"
+        self.saved = (lpk.GITHUB_API, lpk.GITHUB_WEB, os.environ.get("LPK_CACHE"))
+        lpk.GITHUB_API = lpk.GITHUB_WEB = base
+        self.cache = os.path.join(self.tmp, "cache")
+        os.environ["LPK_CACHE"] = self.cache
+        self.out = os.path.join(self.tmp, "out")
+
+    def tearDown(self):
+        self.server.shutdown()
+        lpk.GITHUB_API, lpk.GITHUB_WEB = self.saved[0], self.saved[1]
+        if self.saved[2] is None:
+            os.environ.pop("LPK_CACHE", None)
+        else:
+            os.environ["LPK_CACHE"] = self.saved[2]
+        shutil.rmtree(self.tmp)
+
+    def strings(self):
+        return {r["key"] for r in rows(os.path.join(self.out, "01_red_blue.csv")) if r["kind"] == "strings"}
+
+    def test_downloads_once_and_caches(self):
+        self.assertEqual(quiet(lpk.main, ["split", "--game", self.game, "-o", self.out]), 0)
+        self.assertIn("CONTINUE", self.strings(), "engine text came from the downloaded source")
+        self.assertTrue(os.path.isfile(os.path.join(self.cache, "v0.3.89", "src", "ui", "Menu.lua")))
+        self.assertFalse(os.path.exists(os.path.join(self.cache, "v0.3.89", "assets")),
+                         "only src/*.lua is kept")
+        self.assertFalse(os.path.exists(os.path.join(self.cache, "escape.lua")),
+                         "archive paths can't escape the cache")
+        downloads = [h for h in self.hits if h.endswith(".zip")]
+        self.assertEqual(len(downloads), 1)
+        quiet(lpk.main, ["split", "--game", self.game, "-o", self.out, "--engine-version", "0.3.89"])
+        self.assertEqual(len([h for h in self.hits if h.endswith(".zip")]), 1, "second run uses the cache")
+
+    def test_no_download(self):
+        quiet(lpk.main, ["split", "--game", self.game, "-o", self.out, "--no-download"])
+        self.assertEqual(self.strings(), set())
+        self.assertEqual(self.hits, [])
+
+    def test_unknown_version_fails_softly(self):
+        code = quiet(lpk.main, ["split", "--game", self.game, "-o", self.out, "--engine-version", "9.9.9"])
+        self.assertEqual(code, 0, "the sheets are still written")
+        self.assertEqual(self.strings(), set())
 
 
 if __name__ == "__main__":

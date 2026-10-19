@@ -369,17 +369,153 @@ def load_cache(gen_dir):
     return data
 
 
-def reference_rows(game=None, cache=None, version=None, quiet=False, all_games=False):
-    """Every translatable (kind, key, english, note) the sources give us."""
+# ---- the engine's source (for its menu and battle text) -----------------
+# Release builds don't ship src/, so when the game folder has none, lpk.py
+# downloads that release's "Source code (zip)" from GitHub once, keeps only
+# src/**/*.lua, and caches it per version.
+
+ENGINE_REPO = "bryanthaboi/gen1recomp"
+# overridable for tests (a local server standing in for GitHub)
+GITHUB_API = os.environ.get("LPK_GITHUB_API", "https://api.github.com")
+GITHUB_WEB = os.environ.get("LPK_GITHUB_WEB", "https://github.com")
+
+
+def engine_cache_root():
+    if os.environ.get("LPK_CACHE"):
+        return os.environ["LPK_CACHE"]
+    if sys.platform == "win32" and os.environ.get("LOCALAPPDATA"):
+        base = os.environ["LOCALAPPDATA"]
+    elif sys.platform == "darwin":
+        base = os.path.expanduser("~/Library/Caches")
+    else:
+        base = os.environ.get("XDG_CACHE_HOME") or os.path.expanduser("~/.cache")
+    return os.path.join(base, "easy_language_packs", "engine")
+
+
+def _http(url):
+    import urllib.request
+    req = urllib.request.Request(url, headers={"User-Agent": "easy-language-packs-lpk",
+                                               "Accept": "application/vnd.github+json"})
+    return urllib.request.urlopen(req, timeout=60)
+
+
+def latest_engine_tag():
+    with _http(f"{GITHUB_API}/repos/{ENGINE_REPO}/releases/latest") as resp:
+        return json.load(resp)["tag_name"]
+
+
+def fetch_engine_source(tag, refresh=False):
+    """Folder holding src/ for engine release `tag` (e.g. v0.3.89),
+    downloading it on first use.  Returns None on failure."""
+    import tempfile
+    import zipfile
+    dest = os.path.join(engine_cache_root(), tag)
+    marker = os.path.join(dest, "src", "core", "Strings.lua")
+    if os.path.isfile(marker) and not refresh:
+        print(f"lpk: engine source {tag}: using the copy in {dest}", file=sys.stderr)
+        return dest
+    url = f"{GITHUB_WEB}/{ENGINE_REPO}/archive/refs/tags/{tag}.zip"
+    print(f"lpk: no src/ in the game folder; downloading G1R's source for {tag} "
+          f"(one time, cached in {dest})", file=sys.stderr)
+    tmp = tempfile.NamedTemporaryFile(suffix=".zip", delete=False)
+    try:
+        with _http(url) as resp, tmp:
+            total = int(resp.headers.get("Content-Length") or 0)
+            got, shown = 0, -1
+            while True:
+                chunk = resp.read(1 << 16)
+                if not chunk:
+                    break
+                tmp.write(chunk)
+                got += len(chunk)
+                step = got * 10 // total if total else got >> 23
+                if step != shown:
+                    shown = step
+                    size = f"{got / 1e6:.0f} of {total / 1e6:.0f} MB" if total else f"{got / 1e6:.0f} MB"
+                    print(f"lpk:   {size}", file=sys.stderr)
+        staging = dest + ".partial"
+        if os.path.isdir(staging):
+            shutil.rmtree(staging)
+        kept = 0
+        with zipfile.ZipFile(tmp.name) as zf:
+            for info in zf.infolist():
+                # archive paths look like gen1recomp-0.3.89/src/core/Strings.lua
+                parts = info.filename.split("/", 1)
+                if len(parts) != 2 or not parts[1].startswith("src/") or not parts[1].endswith(".lua"):
+                    continue
+                rel = os.path.normpath(parts[1])
+                if rel.startswith("..") or os.path.isabs(rel):
+                    continue  # never write outside the cache
+                out = os.path.join(staging, rel)
+                os.makedirs(os.path.dirname(out), exist_ok=True)
+                with zf.open(info) as src, open(out, "wb") as fh:
+                    shutil.copyfileobj(src, fh)
+                kept += 1
+        if not os.path.isfile(os.path.join(staging, "src", "core", "Strings.lua")):
+            print(f"lpk: the download for {tag} doesn't look like G1R's source; engine text skipped",
+                  file=sys.stderr)
+            shutil.rmtree(staging, ignore_errors=True)
+            return None
+        if os.path.isdir(dest):
+            shutil.rmtree(dest)
+        os.makedirs(os.path.dirname(dest), exist_ok=True)
+        os.replace(staging, dest)
+        print(f"lpk: engine source {tag}: {kept} files", file=sys.stderr)
+        return dest
+    except Exception as err:  # network, disk, bad zip: report and carry on without
+        print(f"lpk: couldn't download G1R's source for {tag} ({err}); engine menu/battle "
+              "text skipped. Try again, or pass --engine-source <folder with src>.", file=sys.stderr)
+        return None
+    finally:
+        try:
+            os.unlink(tmp.name)
+        except OSError:
+            pass
+
+
+def engine_source(args):
+    """Folder whose src/ holds the engine's Lua: --engine-source, else the
+    game folder's own src/, else a downloaded (and cached) release."""
+    given = getattr(args, "engine_source", None)
+    if given:
+        if not os.path.isfile(os.path.join(given, "src", "core", "Strings.lua")):
+            print(f"lpk: {given} has no src/core/Strings.lua; engine text skipped", file=sys.stderr)
+            return None
+        return given
+    game = getattr(args, "game", None)
+    if game and os.path.isdir(os.path.join(game, "src")):
+        return game
+    if getattr(args, "no_download", False):
+        print("lpk: no src/ in the game folder and --no-download given; engine text skipped",
+              file=sys.stderr)
+        return None
+    tag = getattr(args, "engine_version", None)
+    if tag:
+        tag = tag if tag.startswith("v") else "v" + tag
+    else:
+        try:
+            tag = latest_engine_tag()
+        except Exception as err:
+            print(f"lpk: couldn't look up G1R's latest release ({err}); pass --engine-version "
+                  "X.Y.Z, or --engine-source <folder with src>", file=sys.stderr)
+            return None
+        print(f"lpk: matching engine text to G1R {tag}, the latest release. If you play a "
+              "different version, pass --engine-version X.Y.Z", file=sys.stderr)
+    return fetch_engine_source(tag, getattr(args, "refresh_engine", False))
+
+
+def reference_rows(game=None, cache=None, version=None, quiet=False, all_games=False, source=None):
+    """Every translatable (kind, key, english, note) the sources give us.
+    `source` is the folder holding the engine's src/ (see engine_source)."""
     rows = []
-    if game:
-        strings = engine_strings(game, all_games)
+    if source:
+        strings = engine_strings(source, all_games)
         if strings is None:
-            print(f"lpk: no src/ folder in {game}; engine strings skipped", file=sys.stderr)
+            print(f"lpk: no src/ folder in {source}; engine strings skipped", file=sys.stderr)
         else:
             for text, where in strings:
                 rows.append(("strings", text, text, where))
-            for sid, label in status_labels(game):
+            for sid, label in status_labels(source):
                 rows.append(("statuses", sid, label, ""))
     gen_dir = None
     searched = cache_candidates(cache, game)
@@ -661,6 +797,7 @@ def cmd_check(args):
     ref = {}
     if args.game or args.cache:
         for kind, key, english, _ in reference_rows(args.game, args.cache, args.version, quiet=True,
+                                                     source=engine_source(args),
                                                      all_games=True):
             ref[(kind, key)] = english
     have_ref = bool(ref)
@@ -739,7 +876,7 @@ def cmd_check(args):
 # --------------------------------------------------------------- template
 
 def cmd_template(args):
-    rows = reference_rows(args.game, args.cache, args.version,
+    rows = reference_rows(args.game, args.cache, args.version, source=engine_source(args),
                           all_games=args.all_games)
     if not rows:
         print("lpk: nothing found; pass --game (the game folder with src/) and/or --cache",
@@ -1200,14 +1337,9 @@ def cmd_split(args):
 
     files = {name: [] for name, _ in SPLIT_FILES}
 
-    # engine-authored text, by source path
-    engine = engine_strings(game) if game else None
-    if engine is None:
-        print("lpk: no src/ in --game; engine menu/battle text skipped", file=sys.stderr)
-        engine = []
-    else:
-        # engine_strings drops other-game paths by default; split wants them
-        engine = engine_strings(game, all_games=True)
+    # engine-authored text, by source path (all games: split sorts them itself)
+    source = engine_source(args)
+    engine = (engine_strings(source, all_games=True) if source else None) or []
     home_file = {"rb": "01_red_blue", "yellow": "02_yellow_exclusive", "gs": "03_gold_silver",
                  "crystal": "04_crystal_exclusive", "frlg": "05_firered_leafgreen",
                  "rs": "06_ruby_sapphire", "emerald": "07_emerald_exclusive"}
@@ -1228,8 +1360,8 @@ def cmd_split(args):
         if home not in ("rb", "yellow") and text in shared_engine:
             continue
         files[home_file[home]].append(["strings", text, home_game[home], text, "", "", where])
-    if game:
-        for sid, label in status_labels(game):
+    if source:
+        for sid, label in status_labels(source):
             files["01_red_blue"].append(["statuses", sid, "gen1", label, "", "", ""])
 
     # script text and id-keyed names, per family
@@ -1400,12 +1532,26 @@ def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     sub = p.add_subparsers(dest="cmd", required=True)
 
+    def engine_args(sp):
+        g = sp.add_argument_group("engine text (menus, battle messages)")
+        g.add_argument("--engine-version", metavar="X.Y.Z",
+                       help="G1R release to take engine text from when the game folder has no "
+                            "src/ (default: the latest release)")
+        g.add_argument("--engine-source", metavar="DIR",
+                       help="a folder containing G1R's src/ (e.g. an unzipped Source code download)")
+        g.add_argument("--no-download", action="store_true",
+                       help="never download G1R's source; skip engine text if src/ is missing")
+        g.add_argument("--refresh-engine", action="store_true",
+                       help="download G1R's source again even if a cached copy exists")
+
     def sources(sp):
-        sp.add_argument("--game", help="game folder containing src/ (for engine strings)")
+        sp.add_argument("--game", help="game folder (engine text comes from its src/ when "
+                        "present, otherwise from a downloaded copy)")
         sp.add_argument("--cache", help="folder holding the imported ROM data (default: the "
                         "--game folder for portable installs, then %%APPDATA%%\\LOVE\\*)")
         sp.add_argument("--version", choices=["red", "blue", "yellow"],
                         help="which imported game to read (default: first found)")
+        engine_args(sp)
 
     t = sub.add_parser("template", help="build a fill-in CSV/JSON of every string")
     sources(t)
@@ -1417,8 +1563,9 @@ def main(argv=None):
                         "Gold/Silver/Crystal and the GBA games")
 
     sp = sub.add_parser("split", help="one CSV per game family + per-gen names and Pokedex")
-    sp.add_argument("--game", required=True, help="game folder (with src/ and, for portable "
-                    "installs, the red/, gold/, firered/... data folders)")
+    sp.add_argument("--game", required=True, help="game folder (for portable installs it holds "
+                    "the red/, gold/, firered/... data folders)")
+    engine_args(sp)
     sp.add_argument("--cache", help="folder holding red/, gold/, ... if not the game folder")
     sp.add_argument("-o", "--output", required=True, help="output folder for the CSVs")
     sp.add_argument("--semicolon", action="store_true", help="use ; as the CSV delimiter")

@@ -172,7 +172,13 @@ Plain Python 3, no installs. On Windows use `py tools\lpk.py ...`.
 py tools\lpk.py template --game "C:\path\to\gen1recomp" -o es.csv
 ```
 
-- `--game` is the game folder containing `src\`. It harvests about 2,450 engine strings.
+- `--game` is your game folder. The menu and battle text comes from G1R's own
+  source code. Release builds don't include it, so the first time, `lpk.py`
+  downloads that release's source from G1R's GitHub, keeps only the Lua files,
+  and caches them in `%LOCALAPPDATA%\easy_language_packs\engine\`. It uses the
+  latest release unless you pass `--engine-version 0.3.89` (match the version
+  you play). `--engine-source DIR` uses a source folder you already have;
+  `--no-download` skips that text instead.
 - Dialogue and names come from your **imported ROM cache**, auto-detected at
   `%APPDATA%\LOVE\pokemon-love2d\red\data\generated` (run the game once with
   your ROM first). Use `--version blue|yellow` or `--cache DIR` to choose.
