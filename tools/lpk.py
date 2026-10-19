@@ -1744,7 +1744,8 @@ def cmd_split(args):
             fh.write("\n")
         print(f"  pack.json          name \"{name}\", label \"{label}\" - edit to taste")
     layout = args.layout
-    planned = lpk_layout.organize(collections.OrderedDict((n, files[n]) for n, _ in SPLIT_FILES), layout)
+    planned = lpk_layout.organize(collections.OrderedDict((n, files[n]) for n, _ in SPLIT_FILES), layout,
+                                  root=root)
     title_of = {lpk_layout.sheet_path(n, layout): t for n, t in SPLIT_FILES}
     rep = write_split(out_dir, planned, delim, layout, restore=args.restore)
     c, lists = rep["counts"], rep["lists"]

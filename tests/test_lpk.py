@@ -123,6 +123,17 @@ def rows(path):
         return list(csv.DictReader(fh))
 
 
+def pack_rows(pack):
+    """(relative path, row) for every CSV row the mod would load from a pack."""
+    for root, dirs, names in os.walk(pack):
+        dirs[:] = sorted(d for d in dirs if not d.startswith(("_", ".")))
+        for name in sorted(names):
+            if name.endswith(".csv"):
+                path = os.path.join(root, name)
+                for r in rows(path):
+                    yield os.path.relpath(path, pack).replace(os.sep, "/"), r
+
+
 def quiet(fn, *a):
     with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
         return fn(*a)
@@ -175,6 +186,7 @@ class Basics(unittest.TestCase):
 
 class SplitCase(unittest.TestCase):
     """A synthetic install and a pack folder to split into."""
+    layout = None            # None: split's default
 
     def setUp(self):
         self.tmp = tempfile.mkdtemp()
@@ -186,14 +198,14 @@ class SplitCase(unittest.TestCase):
         shutil.rmtree(self.tmp)
 
     def split(self, *extra):
-        return quiet(lpk.main, ["split", "--game", self.game, "-o", self.out, *extra])
+        layout = ["--layout", self.layout] if self.layout and "--layout" not in extra else []
+        return quiet(lpk.main, ["split", "--game", self.game, "-o", self.out, *layout, *extra])
 
-    def path(self, name):
-        """Where the organized layout puts one of split's sheets."""
-        return os.path.join(self.out, *lpk_layout.sheet_path(name, "organized").split("/"))
+    def path(self, rel):
+        return os.path.join(self.out, *rel.split("/"))
 
     def sheet(self, name):
-        return rows(self.path(name))
+        return rows(self.path(name + ".csv"))
 
     def save(self, path, data, fieldnames=None):
         os.makedirs(os.path.dirname(path), exist_ok=True)
@@ -202,10 +214,22 @@ class SplitCase(unittest.TestCase):
             w.writeheader()
             w.writerows(data)
 
+    def find(self, match, kind=None):
+        """The pack file (relative path) holding the row whose english, key or
+        first notes label is `match` (and whose kind is `kind`, if given)."""
+        hits = [rel for rel, r in pack_rows(self.out)
+                if match in (r["english"], r["key"], r["notes"].split(",")[0].strip())
+                and kind in (None, r["kind"])]
+        self.assertEqual(len(hits), 1, f"{match!r} in {hits}")
+        return hits[0]
+
 
 class Split(SplitCase):
+    """What split extracts, on the flat layout (one sheet per game family)."""
+    layout = "flat"
+
     def test_writes_every_sheet_and_pack_json(self):
-        self.assertEqual(self.split("--name", "Bahasa Melayu", "--author", "Tester", "--layout", "flat"), 0)
+        self.assertEqual(self.split("--name", "Bahasa Melayu", "--author", "Tester"), 0)
         for name, _ in lpk.SPLIT_FILES:
             self.assertTrue(os.path.isfile(os.path.join(self.out, name + ".csv")), name)
         meta = json.load(open(os.path.join(self.out, "pack.json"), encoding="utf-8"))
@@ -254,11 +278,11 @@ class Split(SplitCase):
                 r["text"] = "SPESIES BARU"
         data.append({"kind": "moves", "key": "GONE", "game": "gen1", "english": "X", "text": "ORPHAN",
                      "versions": "", "notes": ""})
-        self.save(self.path("11_dex_gen1"), data)
+        self.save(self.path("11_dex_gen1.csv"), data)
         self.split("--name", "Second")
         kinds = {r["kind"]: r["text"] for r in self.sheet("11_dex_gen1") if r["kind"] == "dex_kind"}
         self.assertEqual(kinds["dex_kind"], "SPESIES BARU")
-        orphans = rows(os.path.join(self.out, "_orphaned", "G1", "11_dex_gen1.csv"))
+        orphans = rows(os.path.join(self.out, "_orphaned", "11_dex_gen1.csv"))
         self.assertEqual([o["text"] for o in orphans], ["ORPHAN"])
         meta = json.load(open(os.path.join(self.out, "pack.json"), encoding="utf-8"))
         self.assertEqual(meta["name"], "First", "an existing pack.json is kept")
@@ -282,11 +306,11 @@ class Split(SplitCase):
                 r["text"] = "%s naik ke\\ntahap %d!"
             if r["english"] == "A SIGN":
                 r["text"] = "PAPAN TANDA"
-        self.save(self.path("01_red_blue"), data)
+        self.save(self.path("01_red_blue.csv"), data)
         self.assertEqual(quiet(lpk.main, ["check", self.out]), 0)
         dist = os.path.join(self.tmp, "dist")
         self.assertEqual(quiet(lpk.main, ["release", self.out, "-o", dist]), 0)
-        released = rows(os.path.join(dist, "G1", "01_red_blue.csv"))
+        released = rows(os.path.join(dist, "01_red_blue.csv"))
         self.assertEqual(len(released), 2, "untranslated rows are dropped")
         self.assertNotIn("english", released[0], "the ROM-text column is stripped")
 
@@ -296,161 +320,148 @@ class Split(SplitCase):
         for r in data:
             if r["key"] == "AlreadyAsleepText" or "already asleep" in r["english"]:
                 r["text"] = "{TARGET} tidur"  # {PROMPT} dropped
-        self.save(self.path("03_gold_silver"), data)
+        self.save(self.path("03_gold_silver.csv"), data)
         self.assertEqual(quiet(lpk.main, ["check", self.out]), 1)
 
 
 class SplitLayout(SplitCase):
-    """The organized layout, the manifest in _lpk/, and what a re-run keeps:
-    translations wherever they are, rows the translator moved or deleted,
-    files split no longer writes."""
+    """The manifest in _lpk/ and what a re-run keeps: translations wherever they
+    are, rows the translator moved or deleted, files split no longer writes."""
 
     def manifest(self):
         with open(os.path.join(self.out, "_lpk", "split.json"), encoding="utf-8") as fh:
             return json.load(fh)
 
-    def keys_in(self, path):
-        return [r["key"] for r in rows(path)]
+    def edit(self, rel, fn, fieldnames=None):
+        data = rows(self.path(rel))
+        self.save(self.path(rel), fn(data), fieldnames)
 
-    def translate(self, name, english, text):
-        data = self.sheet(name)
-        for r in data:
-            if r["english"] == english:
-                r["text"] = text
-        self.save(self.path(name), data)
+    def translate(self, match, text):
+        def fn(data):
+            for r in data:
+                if match in (r["english"], r["key"]):
+                    r["text"] = text
+            return data
+        self.edit(self.find(match), fn)
 
-    def move(self, name, english, dest, fieldnames=None):
-        """Move one row from a split sheet to `dest`, appending it there."""
-        data = self.sheet(name)
-        row = next(r for r in data if r["english"] == english)
-        self.save(self.path(name), [r for r in data if r is not row])
-        old = rows(dest) if os.path.isfile(dest) else []
-        self.save(dest, old + [{k: row.get(k, "") for k in (fieldnames or lpk.SPLIT_HEADER)}], fieldnames)
-        return row
+    def move(self, match, dest, fieldnames=None):
+        """Move one row from wherever it is to `dest` (relative), appending it there."""
+        src = self.find(match)
+        data = rows(self.path(src))
+        row = next(r for r in data if match in (r["english"], r["key"]))
+        self.save(self.path(src), [r for r in data if r is not row])
+        old = rows(self.path(dest)) if os.path.isfile(self.path(dest)) else []
+        self.save(self.path(dest), old + [{k: row.get(k, "") for k in (fieldnames or lpk.SPLIT_HEADER)}],
+                  fieldnames)
+        return src
 
     def test_organized_is_the_default(self):
         self.split()
-        self.assertTrue(os.path.isfile(os.path.join(self.out, "G1", "01_red_blue.csv")))
-        self.assertTrue(os.path.isfile(os.path.join(self.out, "G1", "Yellow", "02_yellow_exclusive.csv")))
-        self.assertFalse(os.path.exists(os.path.join(self.out, "01_red_blue.csv")))
-        self.assertFalse(os.path.exists(self.path("05_firered_leafgreen")), "empty sheets aren't written")
         self.assertEqual(self.manifest()["layout"], "organized")
+        self.assertFalse(os.path.exists(self.path("01_red_blue.csv")))
+        self.assertEqual(self.find("TACKLE"), "G1/Names/moves.csv")
 
     def test_upgrading_a_flat_pack_keeps_its_translations(self):
         self.split("--layout", "flat")
         shutil.rmtree(os.path.join(self.out, "_lpk"))          # as an older lpk.py left it
-        flat = os.path.join(self.out, "01_red_blue.csv")
-        data = rows(flat)
-        for r in data:
-            if r["english"] == "A SIGN":
-                r["text"] = "PAPAN TANDA"
-        self.save(flat, data)
+        self.translate("A SIGN", "PAPAN TANDA")
         self.split()
-        signs = [r["text"] for r in self.sheet("01_red_blue") if r["english"] == "A SIGN"]
-        self.assertEqual(signs, ["PAPAN TANDA"])
-        self.assertFalse(os.path.exists(flat), "the old sheet left the pack")
+        rel = self.find("A SIGN")
+        self.assertTrue(rel.startswith("G1/"))
+        self.assertEqual([r["text"] for r in rows(self.path(rel)) if r["english"] == "A SIGN"], ["PAPAN TANDA"])
+        self.assertFalse(os.path.exists(self.path("01_red_blue.csv")), "the old sheet left the pack")
         kept = glob.glob(os.path.join(self.out, "_orphaned", "_retired", "*", "01_red_blue.csv"))
         self.assertEqual(len(kept), 1, "a retired sheet with translations is kept in _orphaned/_retired")
-        self.assertFalse(os.path.exists(os.path.join(self.out, "02_yellow_exclusive.csv")))
+        self.assertFalse(os.path.exists(self.path("02_yellow_exclusive.csv")))
         self.assertEqual(glob.glob(os.path.join(self.out, "_orphaned", "_retired", "*", "02_*")), [],
                          "an untranslated retired sheet is simply removed")
         self.assertEqual(quiet(lpk.main, ["check", self.out]), 0, "no key is defined twice")
 
     def test_moved_rows_stay_where_the_translator_put_them(self):
         self.split()
-        self.translate("01_red_blue", "A SIGN", "PAPAN TANDA")
-        mine = os.path.join(self.out, "G1", "mine.csv")
-        self.move("01_red_blue", "A SIGN", mine)                       # into a file of their own
-        self.move("01_red_blue", "TACKLE", self.path("08_names_gen1"))  # into another split file
+        self.translate("A SIGN", "PAPAN TANDA")
+        self.move("A SIGN", "G1/mine.csv")                       # into a file of their own
+        self.move("TACKLE", "G1/Names/species.csv")              # into another split file
         self.split()
-        self.split()                                                   # and it stays that way
-        rb = self.sheet("01_red_blue")
-        self.assertNotIn("A SIGN", [r["english"] for r in rb])
-        self.assertNotIn("TACKLE", [r["key"] for r in rb])
-        self.assertEqual([(r["english"], r["text"]) for r in rows(mine)], [("A SIGN", "PAPAN TANDA")])
-        self.assertIn("TACKLE", self.keys_in(self.path("08_names_gen1")))
-        self.assertEqual(sorted(self.manifest()["pins"].values()), ["G1/08_names_gen1.csv", "G1/mine.csv"])
+        self.split()                                             # and it stays that way
+        self.assertEqual(self.find("A SIGN"), "G1/mine.csv")
+        self.assertEqual([(r["english"], r["text"]) for r in rows(self.path("G1/mine.csv"))],
+                         [("A SIGN", "PAPAN TANDA")])
+        self.assertEqual(self.find("TACKLE"), "G1/Names/species.csv")
+        self.assertEqual(sorted(self.manifest()["pins"].values()), ["G1/Names/species.csv", "G1/mine.csv"])
 
     def test_rows_in_your_own_file_get_fresh_english_and_nothing_else_changes(self):
         self.split()
-        self.translate("01_red_blue", "TACKLE", "TERJANG")
-        mine = os.path.join(self.out, "G1", "mine.csv")
+        self.translate("TACKLE", "TERJANG")
         cols = lpk.SPLIT_HEADER + ["comment"]
-        self.save(mine, [{"kind": "moves", "key": "MY_OWN", "game": "gen1", "english": "", "text": "SENDIRI",
-                          "comment": "mine"}], cols)
-        self.move("01_red_blue", "TACKLE", mine, cols)
-        for v in ("red", "blue", "yellow"):                            # a game update renames the move
+        self.save(self.path("G1/mine.csv"), [{"kind": "moves", "key": "MY_OWN", "game": "gen1", "english": "",
+                                              "text": "SENDIRI", "comment": "mine"}], cols)
+        self.move("TACKLE", "G1/mine.csv", cols)
+        for v in ("red", "blue", "yellow"):                      # a game update renames the move
             write(os.path.join(self.game, v, "data", "generated", "moves.lua"),
                   {"TACKLE": {"id": "TACKLE", "name": "BODY SLAM"}})
         self.split()
-        got = rows(mine)
+        got = rows(self.path("G1/mine.csv"))
         self.assertEqual([r["key"] for r in got], ["MY_OWN", "TACKLE"], "rows and order are kept")
         self.assertEqual(got[0]["comment"], "mine")
         self.assertEqual((got[1]["english"], got[1]["text"]), ("BODY SLAM", "TERJANG"))
 
     def test_deleted_rows_stay_deleted_until_restored(self):
         self.split()
-        data = self.sheet("01_red_blue")
-        self.save(self.path("01_red_blue"), [r for r in data if r["english"] != "A SIGN"])
+        rel = self.find("A SIGN")
+        self.edit(rel, lambda data: [r for r in data if r["english"] != "A SIGN"])
         self.split()
         self.split()
-        self.assertNotIn("A SIGN", [r["english"] for r in self.sheet("01_red_blue")])
-        self.assertEqual(list(self.manifest()["deleted"].values()), [["G1/01_red_blue.csv"]])
-        self.split("--restore", "G1\\01_red_blue.csv")
-        self.assertIn("A SIGN", [r["english"] for r in self.sheet("01_red_blue")])
+        self.assertEqual([x for x, r in pack_rows(self.out) if r["english"] == "A SIGN"], [])
+        self.assertEqual(list(self.manifest()["deleted"].values()), [[rel]])
+        self.split("--restore", rel.replace("/", "\\"))
+        self.assertEqual(self.find("A SIGN"), rel)
         self.assertEqual(self.manifest()["deleted"], {})
-
-    def test_deleting_one_copy_of_a_key_split_writes_twice(self):
-        gen3(os.path.join(self.game, "firered"))         # FRLG shares Ruby's line, so both sheets get it
-        self.split()
-        frlg, rs = self.path("05_firered_leafgreen"), self.path("06_ruby_sapphire")
-        line = [r for r in rows(frlg) if r["kind"] == "dialogue"]
-        self.assertEqual(len(line), 1)
-        self.assertIn(line[0]["key"], self.keys_in(rs))
-        self.save(frlg, [r for r in rows(frlg) if r["kind"] != "dialogue"])
-        self.split()
-        self.split()
-        # (this small FRLG sheet had nothing else, so it's retired once its one row is gone)
-        self.assertNotIn(line[0]["key"], self.keys_in(frlg) if os.path.isfile(frlg) else [],
-                         "the deleted copy stays deleted")
-        self.assertEqual(self.keys_in(rs).count(line[0]["key"]), 1, "the other copy is untouched")
-        self.assertEqual(list(self.manifest()["deleted"].values()), [["G3/FRLG/05_firered_leafgreen.csv"]])
 
     def test_restore_all(self):
         self.split()
-        os.remove(self.path("08_names_gen1"))                         # deleting a whole file
+        os.remove(self.path("G1/Names/species.csv"))           # deleting a whole file
         self.split()
-        self.assertFalse(os.path.exists(self.path("08_names_gen1")))
+        self.assertFalse(os.path.exists(self.path("G1/Names/species.csv")))
         self.split("--restore", "all")
-        self.assertTrue(os.path.isfile(self.path("08_names_gen1")))
+        self.assertTrue(os.path.isfile(self.path("G1/Names/species.csv")))
+
+    def test_deleting_one_copy_of_a_key_split_writes_twice(self):
+        # the flat layout writes a line FRLG and Ruby share in both sheets
+        gen3(os.path.join(self.game, "firered"))
+        self.split("--layout", "flat")
+        frlg, rs = "05_firered_leafgreen", "06_ruby_sapphire"
+        line = [r for r in self.sheet(frlg) if r["kind"] == "dialogue"]
+        self.assertEqual(len(line), 1)
+        self.assertIn(line[0]["key"], [r["key"] for r in self.sheet(rs)])
+        self.edit(frlg + ".csv", lambda data: [r for r in data if r["kind"] != "dialogue"])
+        self.split("--layout", "flat")
+        self.split("--layout", "flat")
+        self.assertNotIn(line[0]["key"], [r["key"] for r in self.sheet(frlg)], "the deleted copy stays deleted")
+        self.assertEqual([r["key"] for r in self.sheet(rs)].count(line[0]["key"]), 1, "the other copy is untouched")
+        self.assertEqual(list(self.manifest()["deleted"].values()), [["05_firered_leafgreen.csv"]])
 
     def test_a_layout_change_moves_rows_but_not_the_translators(self):
         self.split()
-        self.translate("11_dex_gen1", "NEW SPECIE", "SPESIES BARU")
-        mine = os.path.join(self.out, "G1", "mine.csv")
-        self.move("01_red_blue", "A SIGN", mine)
-        new_paths = {"11_dex_gen1": "G1/Pokedex/11_dex_gen1.csv", "08_names_gen1": "G1/Names/08_names_gen1.csv",
-                     "01_red_blue": "G1/Towns/01_red_blue.csv"}
-        with mock.patch.dict(lpk_layout.ORGANIZED_PATHS, new_paths):
+        self.translate("TACKLE", "TERJANG")
+        self.move("A SIGN", "G1/mine.csv")
+        with mock.patch.dict(lpk_layout.FOLDERS, {"names": "Nimi"}):
             self.split()
-            kinds = [r["text"] for r in rows(os.path.join(self.out, "G1", "Pokedex", "11_dex_gen1.csv"))
-                     if r["kind"] == "dex_kind"]
-            self.assertTrue(os.path.isfile(os.path.join(self.out, "G1", "Names", "08_names_gen1.csv")))
-            self.assertNotIn("A SIGN", [r["english"] for r in rows(os.path.join(self.out, "G1", "Towns",
-                                                                                "01_red_blue.csv"))])
-        self.assertEqual(kinds, ["SPESIES BARU"], "the translation followed the row")
-        self.assertEqual([r["english"] for r in rows(mine)], ["A SIGN"], "a translator's move beats the layout")
-        self.assertEqual(len(glob.glob(os.path.join(self.out, "_orphaned", "_retired", "*", "G1",
-                                                    "11_dex_gen1.csv"))), 1)
-        self.assertFalse(os.path.exists(os.path.join(self.out, "G1", "08_names_gen1.csv")))
-        self.assertEqual(glob.glob(os.path.join(self.out, "_orphaned", "_retired", "*", "G1", "08_*")), [])
+            self.assertEqual(self.find("TACKLE"), "G1/Nimi/moves.csv")
+            self.assertEqual([r["text"] for r in rows(self.path("G1/Nimi/moves.csv"))], ["TERJANG"],
+                             "the translation followed the row")
+        self.assertEqual(self.find("A SIGN"), "G1/mine.csv", "a translator's move beats the layout")
+        self.assertEqual(len(glob.glob(os.path.join(self.out, "_orphaned", "_retired", "*", "G1", "Names",
+                                                    "moves.csv"))), 1, "the translated old file is kept")
+        self.assertFalse(os.path.exists(self.path("G1/Names/species.csv")))
+        self.assertEqual(glob.glob(os.path.join(self.out, "_orphaned", "_retired", "*", "G1", "Names",
+                                                "species.csv")), [], "an untranslated old file is removed")
 
     def test_release_leaves_out_working_folders(self):
         self.split()
-        data = self.sheet("11_dex_gen1")
-        data.append({"kind": "moves", "key": "GONE", "game": "gen1", "english": "X", "text": "ORPHAN",
-                     "versions": "", "notes": ""})
-        self.save(self.path("11_dex_gen1"), data)
+        self.edit("G1/Names/moves.csv", lambda data: data + [
+            {"kind": "moves", "key": "GONE", "game": "gen1", "english": "X", "text": "ORPHAN",
+             "versions": "", "notes": ""}])
         self.split()
         self.assertTrue(os.path.isdir(os.path.join(self.out, "_orphaned")))
         dist = os.path.join(self.tmp, "dist")
@@ -458,6 +469,117 @@ class SplitLayout(SplitCase):
         self.assertFalse(os.path.exists(os.path.join(dist, "_orphaned")))
         self.assertFalse(os.path.exists(os.path.join(dist, "_lpk")))
         self.assertTrue(os.path.isfile(os.path.join(dist, "pack.json")))
+
+
+class Gen1Layout(SplitCase):
+    """Gen 1 lines go by their script label: map codes, final-game places,
+    families, Yellow's own folder."""
+
+    def setUp(self):
+        super().setUp()
+        for v in ("red", "blue", "yellow"):
+            text = {"_MewDexEntry": Y_DEX if v == "yellow" else RB_DEX,
+                    "_PalletTownText1": "PALLET!", "_RockTunnel1FText1": "ROCKY", "_OakSpeechText1": "WELCOME",
+                    "_CinnabarQuizQuestionsText1": "QUIZ", "_SignText": "A SIGN"}
+            if v == "yellow":
+                text["_CeruleanMelaniesHouseText1"] = "MELANIE"
+            write(os.path.join(self.game, v, "data", "generated", "text.lua"), text)
+        self.split()
+
+    def test_places(self):
+        self.assertEqual(self.find("PALLET!"), "G1/Towns/T01_pallet.csv")
+        self.assertEqual(self.find("ROCKY"), "G1/Dungeons/D15_rock_tunnel.csv", "where it is in the final game")
+        self.assertEqual(self.find("QUIZ"), "G1/Towns/T09_cinnabar.csv", "a line with no map name, known place")
+        self.assertEqual(self.find("WELCOME"), "G1/intro.csv")
+        self.assertEqual(self.find("MELANIE"), "G1/Yellow/Towns/T04_cerulean.csv")
+
+    def test_everything_else(self):
+        self.assertEqual(self.find("SAVE"), "Engine/menus.csv", "engine text applies to every game")
+        self.assertEqual(self.find("TACKLE"), "G1/Names/moves.csv")
+        self.assertEqual(self.find("MEW", kind="species"), "G1/Names/species.csv")
+        self.assertEqual(self.find("MEW", kind="dex_kind"), "G1/Pokedex/categories.csv")
+        self.assertEqual(self.find("MEW#" + lpk.fnv1a(RB_DEX)), "G1/Pokedex/entries.csv")
+        self.assertEqual(self.find("MEW#" + lpk.fnv1a(Y_DEX)), "G1/Yellow/Pokedex/entries.csv")
+        self.assertEqual(quiet(lpk.main, ["check", self.out]), 0)
+
+
+class Gen2Layout(SplitCase):
+    """Gen 2 lines are traced: map events -> scripts -> text, and the map's
+    Town Map landmark picks the file."""
+
+    def setUp(self):
+        super().setUp()
+        for v, addr, script, mid, landmark in (
+                ("gold", "03:4d44", "03:4d30", "NEW_BARK_TOWN", (1, "NEW BARK TOWN")),
+                ("crystal", "12:5000", "12:4ff0", "TEAM_ROCKET_BASE_B1F", (35, "MAHOGANY TOWN"))):
+            g = os.path.join(self.game, v, "data", "generated")
+            write(os.path.join(g, "landmarks.lua"), {"landmarks": {"LM": {"index": landmark[0], "name": landmark[1]}}})
+            write(os.path.join(g, "maps.lua"), {mid: {"landmark": landmark[0],
+                                                      "bgEvents": [{"scriptKey": script}]}})
+            write(os.path.join(g, "scripts.lua"), {script: [{"op": "writetext", "text": addr}]})
+        self.split()
+
+    def test_traced_lines_land_in_their_place(self):
+        self.assertEqual(self.find("#" + lpk.fnv1a(SHARED_G2)), "G2/Towns/T20_new_bark.csv")
+        self.assertEqual(self.find("Crystal only!{DONE}"), "G2/Crystal/Dungeons/D27_team_rocket_base.csv",
+                         "a map-level override beats the landmark (Mahogany)")
+
+    def test_unreached_lines_go_by_label_and_the_rest_by_kind(self):
+        self.assertEqual(self.find("AlreadyAsleepText"), "G2/System/battle.csv")
+        self.assertEqual(self.find("RAZOR_LEAF"), "G2/Names/moves.csv")
+        self.assertEqual(self.find("CHIKORITA", kind="species"), "G2/Names/species.csv")
+        self.assertEqual(self.find("CHIKORITA#" + lpk.fnv1a("Crystal words.")), "G2/Crystal/Pokedex/entries.csv")
+
+
+class Gen3Layout(SplitCase):
+    """Gen 3: labels or traced scripts, region-map sections, Emerald's Frontier,
+    and text FRLG and Ruby share kept once in G3/Shared."""
+
+    def setUp(self):
+        super().setUp()
+        hello = [{"t": "text", "s": "Welcome to "}, {"t": "player"}, {"t": "eos"}]
+        menu = [{"t": "text", "s": "Shared menu text"}, {"t": "eos"}]
+        frlg_only = [{"t": "text", "s": "Pallet line"}, {"t": "eos"}]
+        self.game3("ruby", {"LittlerootTown_Text_Hello": hello, "gText_Menu": menu},
+                   [("LittlerootTown", 0)])
+        self.game3("emerald", {"Frontier_Text_Hi": [{"t": "text", "s": "Battle Frontier!"}, {"t": "eos"}]},
+                   [("BattleFrontier_OutsideWest", 58)])
+        self.game3("firered", {"g3:08100000": frlg_only, "g3:08100100": menu}, [("PalletTown", 88)],
+                   events={"FR_PALLET_TOWN": {"bgEvents": [{"scriptKey": "g3:08200000"}]}},
+                   scripts={"g3:08200000": [{"op": "message", "value": "g3:08100000"}]})
+        self.split()
+
+    def game3(self, v, text, maps, events=None, scripts=None):
+        g = os.path.join(self.game, v, "data", "generated", "gba")
+        write(os.path.join(g, "scripts", "text.lua"), text, chunked=True)
+        census = {"groups": [{"group": 0, "maps": [{"id": mid, "num": i, "slot": f"0_{i}"}
+                                                   for i, (mid, _) in enumerate(maps)]}]}
+        os.makedirs(os.path.join(g, "map_tree"), exist_ok=True)
+        with open(os.path.join(g, "map_tree", "census.json"), "w", encoding="utf-8") as fh:
+            json.dump(census, fh)
+        for i, (mid, sec) in enumerate(maps):
+            d = os.path.join(g, "map_tree", "maps", f"0_{i}")
+            os.makedirs(d)
+            with open(os.path.join(d, "header.json"), "w", encoding="utf-8") as fh:
+                json.dump({"id": mid, "regionMapSectionId": sec}, fh)
+        if events:
+            write(os.path.join(g, "scripts", "events.lua"), events)
+            write(os.path.join(g, "scripts", "scripts.lua"), scripts)
+
+    def test_places(self):
+        self.assertEqual(self.find("Welcome to {PLAYER}"), "G3/RSE/Towns/T101_littleroot.csv")
+        self.assertEqual(self.find("Battle Frontier!"), "G3/RSE/Emerald/Frontier/F00_battle_frontier.csv")
+        self.assertEqual(self.find("Pallet line"), "G3/FRLG/Towns/T01_pallet.csv", "traced through the scripts")
+
+    def test_text_both_families_have_is_kept_once_in_shared(self):
+        self.assertEqual(self.find("Shared menu text"), "G3/Shared/System/menus.csv")
+        row = next(r for rel, r in pack_rows(self.out) if r["english"] == "Shared menu text")
+        self.assertEqual(row["versions"], "firered ruby")
+        self.assertEqual(row["notes"], "gText_Menu; FRLG: g3:08100100")
+        self.assertEqual(self.find("BULBASAUR", kind="species"), "G3/Shared/Names/species.csv")
+        self.assertEqual(self.find("001", kind="dex_kind"), "G3/RSE/Pokedex/categories.csv",
+                         "only Ruby/Emerald's Pokedex is imported here, so the categories are RSE's")
+        self.assertEqual(quiet(lpk.main, ["check", self.out]), 0)
 
 
 class EngineDownload(unittest.TestCase):
@@ -520,7 +642,7 @@ class EngineDownload(unittest.TestCase):
         shutil.rmtree(self.tmp)
 
     def strings(self):
-        return {r["key"] for r in rows(os.path.join(self.out, "G1", "01_red_blue.csv")) if r["kind"] == "strings"}
+        return {r["key"] for _, r in pack_rows(self.out) if r["kind"] == "strings"}
 
     def test_downloads_once_and_caches(self):
         self.assertEqual(quiet(lpk.main, ["split", "--game", self.game, "-o", self.out]), 0)

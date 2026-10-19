@@ -190,26 +190,41 @@ py tools\lpk.py template --game "C:\path\to\gen1recomp" -o es.csv
 
 Translate the `text` column, drop the file into `packs\es\`, done.
 
-**Split by game** (what most translators want): one folder per generation,
-with sheets per game family plus names and Pokédex sheets, from every game
-you've imported:
+**Split by game and place** (what most translators want): every game you've
+imported, one folder per generation and one sheet per place, so you can
+translate a town, a route or a menu at a time:
 
 ```
 py tools\lpk.py split --game "C:\path\to\gen1recomp" -o packs\zsm --name "Bahasa Melayu" --author "You"
 ```
 
-| file | contents |
-|---|---|
-| `G1\01_red_blue` | Red/Blue dialogue, menu & battle text, moves, items, trainer classes |
-| `G1\Yellow\02_yellow_exclusive` | only Yellow text that Red/Blue don't have |
-| `G2\03_gold_silver` / `G2\Crystal\04_crystal_exclusive` | same, for Gen 2 |
-| `G3\FRLG\05_firered_leafgreen` | FireRed/LeafGreen |
-| `G3\RSE\06_ruby_sapphire` / `G3\RSE\Emerald\07_emerald_exclusive` | Ruby/Sapphire, and Emerald-only text |
-| `G1\08_names_gen1` … `G3\10_names_gen3` | Pokémon names per generation |
-| `G1\11_dex_gen1` … `G3\13_dex_gen3` | Pokédex category and entries; one row per distinct version text (`versions` column says which). Red/Blue and Yellow have different entries for every species |
+```
+packs\zsm\
+  Engine\            menus, battle and option text of the game engine (every game)
+  G1\                Red/Blue
+    Towns\           T01_pallet.csv … T11_saffron.csv
+    Routes\          R01.csv … R25.csv
+    Dungeons\        D01_viridian_forest.csv … D16_seafoam_islands.csv
+    System\          battle, items, PC, marts, Pokédex ratings, menus…
+    Names\  Pokedex\ intro.csv  shared.csv
+    Yellow\          only what Yellow adds, in the same folders
+  G2\                Gold/Silver (Johto towns T20–T31, routes R26–R46, dungeons D17–D37),
+    Crystal\         Kanto as in G1; Crystal's additions in Crystal\
+  G3\
+    FRLG\            FireRed/LeafGreen: Kanto as in G1, Sevii islands T41–T47, R411…, D411…
+    RSE\             Ruby/Sapphire: towns T101–T107, cities C101–C109, routes R101–R134,
+      Emerald\       underwater W124…, dungeons D101…; Emerald adds Frontier\ (F00–F07)
+    Shared\          text FireRed/LeafGreen and Ruby/Sapphire/Emerald have in common
+```
 
-`--layout flat` puts the same 13 sheets straight in the pack folder instead,
-as older versions did.
+A place's sheet holds every line spoken there, and its buildings come along:
+houses, shops and gyms go with their town, and gates go with their route. The
+Pokédex sheets keep one row per distinct version text (the `versions` column says
+which). Red/Blue and Yellow, for example, have different entries for every species.
+Gen 2 and Gen 3 lines are placed by following the games' map scripts, so `split`
+needs those games imported; a game it can't trace gets one sheet in its
+generation folder instead. `--layout flat` writes the original 13 sheets
+(`01_red_blue` … `13_dex_gen3`) straight in the pack folder.
 
 `split` also writes a **`pack.json`** with every setting filled in neutrally
 and a `_comment_…` line explaining each one (the mod ignores those). Set

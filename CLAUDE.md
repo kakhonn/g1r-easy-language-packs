@@ -126,12 +126,27 @@ whole mod.
   builds 13 sheets (01_red_blue, 02_yellow_exclusive, 03_gold_silver,
   04_crystal_exclusive, 05_firered_leafgreen, 06_ruby_sapphire,
   07_emerald_exclusive, 08–10_names_genN, 11–13_dex_genN), then
-  `tools/lpk_layout.py` `organize()` decides each row's file: `organized`
-  (default) groups them in G1/G2/G3 with Yellow/, Crystal/, FRLG/, RSE/,
-  RSE/Emerald/ subfolders; `flat` keeps the 13 in the root. Plus a
-  `pack.json` template (written once; `--force-pack-json`). The plan is to
-  move the per-place layout (T/R/D codes, System/, Shared/…, prototyped
-  outside the repo) into `organize()`, one generation at a time.
+  `tools/lpk_layout.py` `organize()` decides each row's file. `flat` keeps
+  the 13 in the root. `organized` (default) puts every row in a place or
+  topic file under G1/G2/G3:
+  - **Gen 1:** by script label against `G1_CODES` (map → T##/R##/D##; a few
+    floors moved to where they are in the final game), then `G1_NONMAP` and
+    `G1_SYSTEM` label families. Needs no game data.
+  - **Gen 2:** traced from the imported `maps.lua` (events) → `scripts.lua` →
+    text addresses, with the map's `landmarks.lua` name picking the file.
+    There are map overrides, standard-label rules for lines many maps share,
+    and phone banks for lines no map reaches.
+  - **Gen 3:** a map-named label or the same tracing (`scripts/events.lua` →
+    `scripts/scripts.lua`), with the map's `regionMapSectionId` (map_tree
+    headers) → `RSE_SECTIONS` / `EMERALD_SECTIONS` / `FRLG_SECTIONS`. Keys
+    both FRLG and RSE define become one row in G3/Shared/ (versions joined,
+    FRLG notes appended).
+  - **No data:** a version with no data falls back to `GENERATION_PATHS` (the
+    whole sheet in its generation folder).
+  - **Acceptance:** on the owner's install, organized output matches their
+    hand-made reference pack byte for byte.
+
+  Plus a `pack.json` template (written once; `--force-pack-json`).
 - `write_split` owns the files it writes and nothing else, and records them in
   `_lpk/split.json` (per key: every file split wrote it to; pins; deletions).
   On a re-run:
@@ -186,7 +201,7 @@ checkout: release builds have no `tests/`, and the harness needs the engine's
 `tests/love_stub.lua`.
 
 The mod tracks the latest G1R release, so test against a current engine and
-fix the mod when the engine moves. Last full run: 107 Lua checks + 28 Python
+fix the mod when the engine moves. Last full run: 107 Lua checks + 34 Python
 tests, all passing, against engine `dev` (2026-10-19).
 
 ## Releasing
