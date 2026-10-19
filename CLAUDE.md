@@ -30,6 +30,7 @@ lib/live.lua        applies a pack straight onto live game data; remembers origi
 lib/hash.lua        FNV-1a 32-bit -> 8 hex digits (must match lpk.fnv1a)
 lib/csv.lua, json.lua  pure-Lua parsers (the mod sandbox has neither)
 tools/lpk.py        template / split / check / release (Python 3 stdlib only, runs on Windows)
+tools/lpk_layout.py where split puts each row (the pack layout); imported by lpk.py
 packs/_example/     the only pack allowed in the repo ("Pirate" sample, example: true)
 tests/              ROM-free tests: tests/run.py, tests/lua/*_test.lua, tests/test_lpk.py
 deploy.py           copy the mod into a game install for testing
@@ -121,13 +122,34 @@ whole mod.
 
 ## lpk.py
 
-- `split --game DIR -o packs\<id> [--name --author --label]`: 13 sheets
-  (01_red_blue, 02_yellow_exclusive, 03_gold_silver, 04_crystal_exclusive,
-  05_firered_leafgreen, 06_ruby_sapphire, 07_emerald_exclusive,
-  08–10_names_genN, 11–13_dex_genN) + `pack.json` template (written once;
-  `--force-pack-json`). Re-running carries existing translations over
-  (`carry_over`: exact kind+key+game, or plain id → its pinned rows) and
-  parks unmatched ones in `_orphaned/`.
+- `split --game DIR -o packs\<id> [--name --author --label --layout --restore]`:
+  builds 13 sheets (01_red_blue, 02_yellow_exclusive, 03_gold_silver,
+  04_crystal_exclusive, 05_firered_leafgreen, 06_ruby_sapphire,
+  07_emerald_exclusive, 08–10_names_genN, 11–13_dex_genN), then
+  `tools/lpk_layout.py` `organize()` decides each row's file: `organized`
+  (default) groups them in G1/G2/G3 with Yellow/, Crystal/, FRLG/, RSE/,
+  RSE/Emerald/ subfolders; `flat` keeps the 13 in the root. Plus a
+  `pack.json` template (written once; `--force-pack-json`). The plan is to
+  move the per-place layout (T/R/D codes, System/, Shared/…, prototyped
+  outside the repo) into `organize()`, one generation at a time.
+- `write_split` owns the files it writes and nothing else, and records them in
+  `_lpk/split.json` (per key: every file split wrote it to; pins; deletions).
+  On a re-run:
+  - Translations are carried pack-wide (exact kind+key+game, or plain id ↔
+    version-pinned).
+  - A row found where split didn't put it was **moved by the translator** and
+    stays there. In a file the translator made, only english/versions/notes of
+    those rows are refreshed in place.
+  - A row split wrote that's now found nowhere was **deleted** and stays out
+    until `--restore PATH|all`.
+  - Owned files split no longer writes are **retired**: moved to
+    `_orphaned/_retired/<date>/` if they held any translation, else removed.
+  - Translations matching no row are appended to `_orphaned/<path>`.
+  - A pack without a manifest but with root `NN_*.csv` sheets is an older
+    flat pack: those sheets count as split's, so they're carried and retired.
+- **The manifest must live in a `_` folder:** both readers load every non-root
+  `.json` as data (dotfiles too) and skip only `_`/`.` folders. `release` skips
+  `_` folders (`_orphaned`, `_lpk`).
 - Engine text (menus, battles) = `Strings("...")` literals harvested from
   G1R's `src/`. **Release builds don't ship `src/`**: `engine_source()` uses
   `--engine-source`, else `<game>/src`, else downloads that release's source
@@ -164,7 +186,7 @@ checkout: release builds have no `tests/`, and the harness needs the engine's
 `tests/love_stub.lua`.
 
 The mod tracks the latest G1R release, so test against a current engine and
-fix the mod when the engine moves. Last full run: 107 Lua checks + 19 Python
+fix the mod when the engine moves. Last full run: 107 Lua checks + 28 Python
 tests, all passing, against engine `dev` (2026-10-19).
 
 ## Releasing

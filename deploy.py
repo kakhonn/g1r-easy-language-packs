@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Copy this mod into a game install for testing, without packaging.
 
-    py deploy.py "K:\\path\\to\\gen1recomp-win64"
+    py deploy.py "C:\\path\\to\\gen1recomp-win64"
 
 Writes into <game>/mods/easy_language_packs/.  Files from the repository
 replace their installed copies; anything else already there (your packs,

@@ -5,6 +5,7 @@ is written from synthetic records, so neither the engine nor any ROM is needed.
 """
 import contextlib
 import csv
+import glob
 import http.server
 import threading
 import zipfile
@@ -15,10 +16,12 @@ import shutil
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "tools"))
 import lpk  # noqa: E402
+import lpk_layout  # noqa: E402
 
 
 # ---- writing a fake imported cache --------------------------------------
@@ -170,7 +173,9 @@ class Basics(unittest.TestCase):
         self.assertEqual([e["text"] for e in entries], ["FROM-ROOT", "FROM-FOLDER"])
 
 
-class Split(unittest.TestCase):
+class SplitCase(unittest.TestCase):
+    """A synthetic install and a pack folder to split into."""
+
     def setUp(self):
         self.tmp = tempfile.mkdtemp()
         self.game = os.path.join(self.tmp, "game")
@@ -183,11 +188,24 @@ class Split(unittest.TestCase):
     def split(self, *extra):
         return quiet(lpk.main, ["split", "--game", self.game, "-o", self.out, *extra])
 
-    def sheet(self, name):
-        return rows(os.path.join(self.out, name + ".csv"))
+    def path(self, name):
+        """Where the organized layout puts one of split's sheets."""
+        return os.path.join(self.out, *lpk_layout.sheet_path(name, "organized").split("/"))
 
+    def sheet(self, name):
+        return rows(self.path(name))
+
+    def save(self, path, data, fieldnames=None):
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8-sig", newline="") as fh:
+            w = csv.DictWriter(fh, fieldnames=fieldnames or lpk.SPLIT_HEADER)
+            w.writeheader()
+            w.writerows(data)
+
+
+class Split(SplitCase):
     def test_writes_every_sheet_and_pack_json(self):
-        self.assertEqual(self.split("--name", "Bahasa Melayu", "--author", "Tester"), 0)
+        self.assertEqual(self.split("--name", "Bahasa Melayu", "--author", "Tester", "--layout", "flat"), 0)
         for name, _ in lpk.SPLIT_FILES:
             self.assertTrue(os.path.isfile(os.path.join(self.out, name + ".csv")), name)
         meta = json.load(open(os.path.join(self.out, "pack.json"), encoding="utf-8"))
@@ -230,29 +248,25 @@ class Split(unittest.TestCase):
 
     def test_rerun_keeps_translations_and_pack_json(self):
         self.split("--name", "First")
-        path = os.path.join(self.out, "11_dex_gen1.csv")
-        data = rows(path)
+        data = self.sheet("11_dex_gen1")
         for r in data:
             if r["kind"] == "dex_kind":
                 r["text"] = "SPESIES BARU"
         data.append({"kind": "moves", "key": "GONE", "game": "gen1", "english": "X", "text": "ORPHAN",
                      "versions": "", "notes": ""})
-        with open(path, "w", encoding="utf-8-sig", newline="") as fh:
-            w = csv.DictWriter(fh, fieldnames=lpk.SPLIT_HEADER)
-            w.writeheader()
-            w.writerows(data)
+        self.save(self.path("11_dex_gen1"), data)
         self.split("--name", "Second")
         kinds = {r["kind"]: r["text"] for r in self.sheet("11_dex_gen1") if r["kind"] == "dex_kind"}
         self.assertEqual(kinds["dex_kind"], "SPESIES BARU")
-        orphans = rows(os.path.join(self.out, "_orphaned", "11_dex_gen1.csv"))
+        orphans = rows(os.path.join(self.out, "_orphaned", "G1", "11_dex_gen1.csv"))
         self.assertEqual([o["text"] for o in orphans], ["ORPHAN"])
         meta = json.load(open(os.path.join(self.out, "pack.json"), encoding="utf-8"))
         self.assertEqual(meta["name"], "First", "an existing pack.json is kept")
 
     def test_plain_key_carries_into_version_rows(self):
-        self.split()
-        path = os.path.join(self.out, "11_dex_gen1.csv")
-        with open(path, "w", encoding="utf-8-sig", newline="") as fh:
+        # a pack from before version-pinned keys: one plain-key row, no manifest yet
+        os.makedirs(self.out)
+        with open(os.path.join(self.out, "11_dex_gen1.csv"), "w", encoding="utf-8-sig", newline="") as fh:
             w = csv.writer(fh)
             w.writerow(lpk.SPLIT_HEADER)
             w.writerow(["dex_text", "MEW", "gen1", "_MewDexEntry", "OLD-STYLE", "", ""])
@@ -262,36 +276,188 @@ class Split(unittest.TestCase):
 
     def test_check_and_release(self):
         self.split()
-        path = os.path.join(self.out, "01_red_blue.csv")
-        data = rows(path)
+        data = self.sheet("01_red_blue")
         for r in data:
             if r["key"] == "%s grew\\nto level %d!":
                 r["text"] = "%s naik ke\\ntahap %d!"
             if r["english"] == "A SIGN":
                 r["text"] = "PAPAN TANDA"
-        with open(path, "w", encoding="utf-8-sig", newline="") as fh:
-            w = csv.DictWriter(fh, fieldnames=lpk.SPLIT_HEADER)
-            w.writeheader()
-            w.writerows(data)
+        self.save(self.path("01_red_blue"), data)
         self.assertEqual(quiet(lpk.main, ["check", self.out]), 0)
         dist = os.path.join(self.tmp, "dist")
         self.assertEqual(quiet(lpk.main, ["release", self.out, "-o", dist]), 0)
-        released = rows(os.path.join(dist, "01_red_blue.csv"))
+        released = rows(os.path.join(dist, "G1", "01_red_blue.csv"))
         self.assertEqual(len(released), 2, "untranslated rows are dropped")
         self.assertNotIn("english", released[0], "the ROM-text column is stripped")
 
     def test_check_catches_placeholder_mistakes(self):
         self.split()
-        path = os.path.join(self.out, "03_gold_silver.csv")
-        data = rows(path)
+        data = self.sheet("03_gold_silver")
         for r in data:
             if r["key"] == "AlreadyAsleepText" or "already asleep" in r["english"]:
                 r["text"] = "{TARGET} tidur"  # {PROMPT} dropped
-        with open(path, "w", encoding="utf-8-sig", newline="") as fh:
-            w = csv.DictWriter(fh, fieldnames=lpk.SPLIT_HEADER)
-            w.writeheader()
-            w.writerows(data)
+        self.save(self.path("03_gold_silver"), data)
         self.assertEqual(quiet(lpk.main, ["check", self.out]), 1)
+
+
+class SplitLayout(SplitCase):
+    """The organized layout, the manifest in _lpk/, and what a re-run keeps:
+    translations wherever they are, rows the translator moved or deleted,
+    files split no longer writes."""
+
+    def manifest(self):
+        with open(os.path.join(self.out, "_lpk", "split.json"), encoding="utf-8") as fh:
+            return json.load(fh)
+
+    def keys_in(self, path):
+        return [r["key"] for r in rows(path)]
+
+    def translate(self, name, english, text):
+        data = self.sheet(name)
+        for r in data:
+            if r["english"] == english:
+                r["text"] = text
+        self.save(self.path(name), data)
+
+    def move(self, name, english, dest, fieldnames=None):
+        """Move one row from a split sheet to `dest`, appending it there."""
+        data = self.sheet(name)
+        row = next(r for r in data if r["english"] == english)
+        self.save(self.path(name), [r for r in data if r is not row])
+        old = rows(dest) if os.path.isfile(dest) else []
+        self.save(dest, old + [{k: row.get(k, "") for k in (fieldnames or lpk.SPLIT_HEADER)}], fieldnames)
+        return row
+
+    def test_organized_is_the_default(self):
+        self.split()
+        self.assertTrue(os.path.isfile(os.path.join(self.out, "G1", "01_red_blue.csv")))
+        self.assertTrue(os.path.isfile(os.path.join(self.out, "G1", "Yellow", "02_yellow_exclusive.csv")))
+        self.assertFalse(os.path.exists(os.path.join(self.out, "01_red_blue.csv")))
+        self.assertFalse(os.path.exists(self.path("05_firered_leafgreen")), "empty sheets aren't written")
+        self.assertEqual(self.manifest()["layout"], "organized")
+
+    def test_upgrading_a_flat_pack_keeps_its_translations(self):
+        self.split("--layout", "flat")
+        shutil.rmtree(os.path.join(self.out, "_lpk"))          # as an older lpk.py left it
+        flat = os.path.join(self.out, "01_red_blue.csv")
+        data = rows(flat)
+        for r in data:
+            if r["english"] == "A SIGN":
+                r["text"] = "PAPAN TANDA"
+        self.save(flat, data)
+        self.split()
+        signs = [r["text"] for r in self.sheet("01_red_blue") if r["english"] == "A SIGN"]
+        self.assertEqual(signs, ["PAPAN TANDA"])
+        self.assertFalse(os.path.exists(flat), "the old sheet left the pack")
+        kept = glob.glob(os.path.join(self.out, "_orphaned", "_retired", "*", "01_red_blue.csv"))
+        self.assertEqual(len(kept), 1, "a retired sheet with translations is kept in _orphaned/_retired")
+        self.assertFalse(os.path.exists(os.path.join(self.out, "02_yellow_exclusive.csv")))
+        self.assertEqual(glob.glob(os.path.join(self.out, "_orphaned", "_retired", "*", "02_*")), [],
+                         "an untranslated retired sheet is simply removed")
+        self.assertEqual(quiet(lpk.main, ["check", self.out]), 0, "no key is defined twice")
+
+    def test_moved_rows_stay_where_the_translator_put_them(self):
+        self.split()
+        self.translate("01_red_blue", "A SIGN", "PAPAN TANDA")
+        mine = os.path.join(self.out, "G1", "mine.csv")
+        self.move("01_red_blue", "A SIGN", mine)                       # into a file of their own
+        self.move("01_red_blue", "TACKLE", self.path("08_names_gen1"))  # into another split file
+        self.split()
+        self.split()                                                   # and it stays that way
+        rb = self.sheet("01_red_blue")
+        self.assertNotIn("A SIGN", [r["english"] for r in rb])
+        self.assertNotIn("TACKLE", [r["key"] for r in rb])
+        self.assertEqual([(r["english"], r["text"]) for r in rows(mine)], [("A SIGN", "PAPAN TANDA")])
+        self.assertIn("TACKLE", self.keys_in(self.path("08_names_gen1")))
+        self.assertEqual(sorted(self.manifest()["pins"].values()), ["G1/08_names_gen1.csv", "G1/mine.csv"])
+
+    def test_rows_in_your_own_file_get_fresh_english_and_nothing_else_changes(self):
+        self.split()
+        self.translate("01_red_blue", "TACKLE", "TERJANG")
+        mine = os.path.join(self.out, "G1", "mine.csv")
+        cols = lpk.SPLIT_HEADER + ["comment"]
+        self.save(mine, [{"kind": "moves", "key": "MY_OWN", "game": "gen1", "english": "", "text": "SENDIRI",
+                          "comment": "mine"}], cols)
+        self.move("01_red_blue", "TACKLE", mine, cols)
+        for v in ("red", "blue", "yellow"):                            # a game update renames the move
+            write(os.path.join(self.game, v, "data", "generated", "moves.lua"),
+                  {"TACKLE": {"id": "TACKLE", "name": "BODY SLAM"}})
+        self.split()
+        got = rows(mine)
+        self.assertEqual([r["key"] for r in got], ["MY_OWN", "TACKLE"], "rows and order are kept")
+        self.assertEqual(got[0]["comment"], "mine")
+        self.assertEqual((got[1]["english"], got[1]["text"]), ("BODY SLAM", "TERJANG"))
+
+    def test_deleted_rows_stay_deleted_until_restored(self):
+        self.split()
+        data = self.sheet("01_red_blue")
+        self.save(self.path("01_red_blue"), [r for r in data if r["english"] != "A SIGN"])
+        self.split()
+        self.split()
+        self.assertNotIn("A SIGN", [r["english"] for r in self.sheet("01_red_blue")])
+        self.assertEqual(list(self.manifest()["deleted"].values()), [["G1/01_red_blue.csv"]])
+        self.split("--restore", "G1\\01_red_blue.csv")
+        self.assertIn("A SIGN", [r["english"] for r in self.sheet("01_red_blue")])
+        self.assertEqual(self.manifest()["deleted"], {})
+
+    def test_deleting_one_copy_of_a_key_split_writes_twice(self):
+        gen3(os.path.join(self.game, "firered"))         # FRLG shares Ruby's line, so both sheets get it
+        self.split()
+        frlg, rs = self.path("05_firered_leafgreen"), self.path("06_ruby_sapphire")
+        line = [r for r in rows(frlg) if r["kind"] == "dialogue"]
+        self.assertEqual(len(line), 1)
+        self.assertIn(line[0]["key"], self.keys_in(rs))
+        self.save(frlg, [r for r in rows(frlg) if r["kind"] != "dialogue"])
+        self.split()
+        self.split()
+        # (this small FRLG sheet had nothing else, so it's retired once its one row is gone)
+        self.assertNotIn(line[0]["key"], self.keys_in(frlg) if os.path.isfile(frlg) else [],
+                         "the deleted copy stays deleted")
+        self.assertEqual(self.keys_in(rs).count(line[0]["key"]), 1, "the other copy is untouched")
+        self.assertEqual(list(self.manifest()["deleted"].values()), [["G3/FRLG/05_firered_leafgreen.csv"]])
+
+    def test_restore_all(self):
+        self.split()
+        os.remove(self.path("08_names_gen1"))                         # deleting a whole file
+        self.split()
+        self.assertFalse(os.path.exists(self.path("08_names_gen1")))
+        self.split("--restore", "all")
+        self.assertTrue(os.path.isfile(self.path("08_names_gen1")))
+
+    def test_a_layout_change_moves_rows_but_not_the_translators(self):
+        self.split()
+        self.translate("11_dex_gen1", "NEW SPECIE", "SPESIES BARU")
+        mine = os.path.join(self.out, "G1", "mine.csv")
+        self.move("01_red_blue", "A SIGN", mine)
+        new_paths = {"11_dex_gen1": "G1/Pokedex/11_dex_gen1.csv", "08_names_gen1": "G1/Names/08_names_gen1.csv",
+                     "01_red_blue": "G1/Towns/01_red_blue.csv"}
+        with mock.patch.dict(lpk_layout.ORGANIZED_PATHS, new_paths):
+            self.split()
+            kinds = [r["text"] for r in rows(os.path.join(self.out, "G1", "Pokedex", "11_dex_gen1.csv"))
+                     if r["kind"] == "dex_kind"]
+            self.assertTrue(os.path.isfile(os.path.join(self.out, "G1", "Names", "08_names_gen1.csv")))
+            self.assertNotIn("A SIGN", [r["english"] for r in rows(os.path.join(self.out, "G1", "Towns",
+                                                                                "01_red_blue.csv"))])
+        self.assertEqual(kinds, ["SPESIES BARU"], "the translation followed the row")
+        self.assertEqual([r["english"] for r in rows(mine)], ["A SIGN"], "a translator's move beats the layout")
+        self.assertEqual(len(glob.glob(os.path.join(self.out, "_orphaned", "_retired", "*", "G1",
+                                                    "11_dex_gen1.csv"))), 1)
+        self.assertFalse(os.path.exists(os.path.join(self.out, "G1", "08_names_gen1.csv")))
+        self.assertEqual(glob.glob(os.path.join(self.out, "_orphaned", "_retired", "*", "G1", "08_*")), [])
+
+    def test_release_leaves_out_working_folders(self):
+        self.split()
+        data = self.sheet("11_dex_gen1")
+        data.append({"kind": "moves", "key": "GONE", "game": "gen1", "english": "X", "text": "ORPHAN",
+                     "versions": "", "notes": ""})
+        self.save(self.path("11_dex_gen1"), data)
+        self.split()
+        self.assertTrue(os.path.isdir(os.path.join(self.out, "_orphaned")))
+        dist = os.path.join(self.tmp, "dist")
+        self.assertEqual(quiet(lpk.main, ["release", self.out, "-o", dist]), 0)
+        self.assertFalse(os.path.exists(os.path.join(dist, "_orphaned")))
+        self.assertFalse(os.path.exists(os.path.join(dist, "_lpk")))
+        self.assertTrue(os.path.isfile(os.path.join(dist, "pack.json")))
 
 
 class EngineDownload(unittest.TestCase):
@@ -354,7 +520,7 @@ class EngineDownload(unittest.TestCase):
         shutil.rmtree(self.tmp)
 
     def strings(self):
-        return {r["key"] for r in rows(os.path.join(self.out, "01_red_blue.csv")) if r["kind"] == "strings"}
+        return {r["key"] for r in rows(os.path.join(self.out, "G1", "01_red_blue.csv")) if r["kind"] == "strings"}
 
     def test_downloads_once_and_caches(self):
         self.assertEqual(quiet(lpk.main, ["split", "--game", self.game, "-o", self.out]), 0)

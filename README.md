@@ -190,8 +190,9 @@ py tools\lpk.py template --game "C:\path\to\gen1recomp" -o es.csv
 
 Translate the `text` column, drop the file into `packs\es\`, done.
 
-**Split by game** (what most translators want): one sheet per game family,
-plus names and Pokédex sheets per generation, from every game you've imported:
+**Split by game** (what most translators want): one folder per generation,
+with sheets per game family plus names and Pokédex sheets, from every game
+you've imported:
 
 ```
 py tools\lpk.py split --game "C:\path\to\gen1recomp" -o packs\zsm --name "Bahasa Melayu" --author "You"
@@ -199,30 +200,47 @@ py tools\lpk.py split --game "C:\path\to\gen1recomp" -o packs\zsm --name "Bahasa
 
 | file | contents |
 |---|---|
-| `01_red_blue` | Red/Blue dialogue, menu & battle text, moves, items, trainer classes |
-| `02_yellow_exclusive` | only Yellow text that Red/Blue don't have |
-| `03_gold_silver` / `04_crystal_exclusive` | same, for Gen 2 |
-| `05_firered_leafgreen` | FireRed/LeafGreen |
-| `06_ruby_sapphire` / `07_emerald_exclusive` | Ruby/Sapphire, and Emerald-only text |
-| `08`–`10_names_genN` | Pokémon names per generation |
-| `11`–`13_dex_genN` | Pokédex category and entries; one row per distinct version text (`versions` column says which). Red/Blue and Yellow have different entries for every species |
+| `G1\01_red_blue` | Red/Blue dialogue, menu & battle text, moves, items, trainer classes |
+| `G1\Yellow\02_yellow_exclusive` | only Yellow text that Red/Blue don't have |
+| `G2\03_gold_silver` / `G2\Crystal\04_crystal_exclusive` | same, for Gen 2 |
+| `G3\FRLG\05_firered_leafgreen` | FireRed/LeafGreen |
+| `G3\RSE\06_ruby_sapphire` / `G3\RSE\Emerald\07_emerald_exclusive` | Ruby/Sapphire, and Emerald-only text |
+| `G1\08_names_gen1` … `G3\10_names_gen3` | Pokémon names per generation |
+| `G1\11_dex_gen1` … `G3\13_dex_gen3` | Pokédex category and entries; one row per distinct version text (`versions` column says which). Red/Blue and Yellow have different entries for every species |
+
+`--layout flat` puts the same 13 sheets straight in the pack folder instead,
+as older versions did.
 
 `split` also writes a **`pack.json`** with every setting filled in neutrally
 and a `_comment_…` line explaining each one (the mod ignores those). Set
 `--name "Bahasa Melayu"`, `--author` and optionally `--label` (the
 OPTIONS > LANGUAGE text; by default it's the name in plain A-Z). Point `-o`
-straight at `packs\<your_id>` and the folder is a ready-to-use pack. Re-running
-`split` after a game update refreshes the sheets but keeps your `pack.json`
-(`--force-pack-json` replaces it), and keeps every translation already in the
-sheets: rows are matched by kind, key and game, and anything that no longer
-matches a row is saved to `_orphaned\` (which the mod ignores) instead of lost.
+straight at `packs\<your_id>` and the folder is a ready-to-use pack.
+
+**Re-running `split`** after a game update refreshes the sheets and keeps
+your work:
+
+- every translation already in the pack, wherever it is (rows are matched by
+  kind, key and game);
+- rows you **moved** to another file stay there. In a file you made yourself,
+  `split` only refreshes the English of those rows and leaves everything else
+  in that file alone;
+- rows you **deleted** stay deleted. `--restore G1\01_red_blue.csv` brings
+  back what you deleted from one file, `--restore all` everything;
+- your `pack.json` (`--force-pack-json` replaces it).
+
+`split` keeps track of this in `_lpk\split.json` (don't edit it by hand).
+A translation that no longer matches any row is saved to `_orphaned\`
+instead of lost. A file `split` no longer writes (after a layout change, or when
+upgrading a flat pack) is moved to `_orphaned\_retired\<date>\` if it held any
+translation, once those translations are in their new files; untranslated ones
+are simply removed. The mod and `release` ignore every folder that starts
+with `_`.
 
 Dialogue is matched by its English, so a Gold/Silver translation also applies
 in Crystal wherever the line is identical, even though Crystal stores it at a
-different address. The exclusive sheets hold only what that adds. Copy the
-finished sheets into one pack folder; the `01_`…`13_` names keep them loading
-in the right order. Portable installs need only `--game`; otherwise add
-`--cache "%APPDATA%\LOVE\pokemon-love2d"`.
+different address. The exclusive sheets hold only what that adds. Portable
+installs need only `--game`; otherwise add `--cache "%APPDATA%\LOVE\pokemon-love2d"`.
 
 **Check a pack** (syntax, unknown ids, `%s` mismatches, missing `{CONTROL}`
 codes, overlong lines, the same key translated two ways, coverage):
@@ -271,7 +289,7 @@ deploy.py         copy the mod into a game install for testing
 **Try your changes in the game** without packaging:
 
 ```
-py deploy.py "K:\path\to\gen1recomp-win64"
+py deploy.py "C:\path\to\gen1recomp-win64"
 ```
 
 It copies the mod into `mods\easy_language_packs\`, leaving any packs you
