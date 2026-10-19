@@ -9,6 +9,9 @@ and it switches instantly. No restart, and no Lua to write.
 > Based on the Pokemon Gen 1 Recompilation Project by BOIS CLUB GAMES, LLC
 > (https://github.com/bryanthaboi/gen1recomp)
 
+This is a vibe-coded project, written with Claude (Anthropic's AI). See
+[Made with Claude](#made-with-claude) for what that means here.
+
 - Anything a pack leaves out stays in English, so a half-finished pack still plays.
 - A translation whose `%s` / `%d` placeholders don't match the English is drawn
   in English (with a log line) instead of crashing a battle.
@@ -283,6 +286,23 @@ new version through the `github` field in the manifest.
 `language_templates\`: that column is text from the ROMs. `.gitignore` keeps
 every pack except `_example` out of the repository; share finished packs as
 `lpk.py release` output.
+
+## Made with Claude
+
+Easy Language Packs was vibe-coded: it was built through conversation with
+Claude, Anthropic's AI model.
+
+- **kakhonn** came up with the idea, decided what it should do and how it
+  should behave, tested it, and reviewed the results along the way.
+- **Claude** wrote the code, the tests, `lpk.py` and this documentation. It
+  also researched how G1R Deluxe handles text, fonts, mods and imported game
+  data, by reading the engine's source code.
+
+Every change was checked by the automated tests in `tests/`, which run the mod
+through the engine's real mod loader. Much of it was also checked against
+data imported from real cartridges. Even so, it hasn't had much play-testing
+in the actual game yet, and AI-written code can be wrong in ways that look
+right. If something doesn't work, please open an issue.
 
 ## License
 
