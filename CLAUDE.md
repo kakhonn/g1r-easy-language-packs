@@ -157,8 +157,13 @@ py tests/run.py --python-only               # just lpk.py
 Lua tests run from the engine root and boot the mod through the engine's
 real `src.mods.Loader` (sandbox, manifest validation, events, hooks) over an
 in-memory fs (`tests/lua/harness.lua`: `H.boot(data, {gen, version,
-language, extra})`, `H.optionRow`, `H.diff`). At handoff: 106 Lua checks +
-18 Python tests, all passing, against engine `dev` (= release 0.3.89).
+language, extra})`, `H.optionRow`, `H.diff`). `--engine` must be a source
+checkout: release builds have no `tests/`, and the harness needs the engine's
+`tests/love_stub.lua`.
+
+The mod tracks the latest G1R release, so test against a current engine and
+fix the mod when the engine moves. Last full run: 106 Lua checks + 18 Python
+tests, all passing, against engine `dev` (2026-10-19).
 
 ## Releasing
 
