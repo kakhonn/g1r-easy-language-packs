@@ -155,6 +155,20 @@ class Basics(unittest.TestCase):
         self.assertEqual(lpk.option_label("Español de México y Centroamérica"), "ESPANOL DE")
         self.assertEqual(lpk.option_label("日本語"), "MY LANGUAGE")
 
+    def test_pack_files_load_in_whole_path_order(self):
+        # must match lib/pack.lua (packs_test.lua checks the same pack)
+        tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, tmp)
+        pack = os.path.join(tmp, "o")
+        os.makedirs(os.path.join(pack, "dex"))
+        with open(os.path.join(pack, "dex.csv"), "w", encoding="utf-8") as fh:
+            fh.write("kind,key,text\nitems,POTION,FROM-ROOT\n")
+        with open(os.path.join(pack, "dex", "a.csv"), "w", encoding="utf-8") as fh:
+            fh.write("kind,key,text\nitems,POTION,FROM-FOLDER\n")
+        entries, _, problems = lpk.read_pack(tmp, "o", set())
+        self.assertEqual(problems, [])
+        self.assertEqual([e["text"] for e in entries], ["FROM-ROOT", "FROM-FOLDER"])
+
 
 class Split(unittest.TestCase):
     def setUp(self):

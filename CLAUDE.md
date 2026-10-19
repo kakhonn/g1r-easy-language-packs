@@ -51,8 +51,10 @@ deploy.py           copy the mod into a game install for testing
 2. **Keep the Lua and Python readers in lockstep**: kinds and aliases,
    CSV escapes (`\n \v \f \t \r \\`), the comment rule (kind starting `#`,
    or key starting `#` unless it's `#` + 8 hex), `game` parsing, blank
-   `extends` ignored, JSON `\v` accepted, the FNV-1a hash. `tests/test_lpk.py`
-   and the Lua tests pin the hash to published FNV vectors.
+   `extends` ignored, JSON `\v` accepted, the FNV-1a hash, file load order
+   (recursive, `_`/`.` folders skipped, sorted by whole relative path so
+   `dex.csv` < `dex/a.csv`). `tests/test_lpk.py` and the Lua tests pin the
+   hash to published FNV vectors and both check the file order.
 3. **ENGLISH must restore the original data exactly.** `live.lua` records
    every slot before its first write; the live tests deep-compare all data
    after switching back. Any new kind must go through `Live:set`.
@@ -162,7 +164,7 @@ checkout: release builds have no `tests/`, and the harness needs the engine's
 `tests/love_stub.lua`.
 
 The mod tracks the latest G1R release, so test against a current engine and
-fix the mod when the engine moves. Last full run: 106 Lua checks + 18 Python
+fix the mod when the engine moves. Last full run: 107 Lua checks + 19 Python
 tests, all passing, against engine `dev` (2026-10-19).
 
 ## Releasing

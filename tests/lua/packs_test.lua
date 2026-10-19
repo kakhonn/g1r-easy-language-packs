@@ -129,6 +129,17 @@ do
   eq(data.moves.TACKLE.name, "BARE", "pack.json is optional")
 end
 
+-- files load sorted by their whole path, like lpk.py: "dex.csv" < "dex/a.csv"
+-- because "." sorts before "/", even though the folder "dex" lists first
+do
+  local data = dataset()
+  H.boot(data, { extra = {
+    ["packs/o/dex.csv"] = "kind,key,text\nitems,POTION,FROM-ROOT\n",
+    ["packs/o/dex/a.csv"] = "kind,key,text\nitems,POTION,FROM-FOLDER\n",
+  }, language = "o" })
+  eq(data.items.POTION.name, "FROM-FOLDER", "file order is by whole path, not folder by folder")
+end
+
 -- the hash matches published FNV-1a test values
 eq(H.hash(""), "811c9dc5", "fnv1a('')")
 eq(H.hash("a"), "e40c292c", "fnv1a('a')")

@@ -239,7 +239,7 @@ end
 
 local DATA_EXT = { json = true, csv = true, tsv = true }
 
--- Every data file in a pack directory, recursively, in a stable order.
+-- Every data file in a pack directory, recursively (unsorted: Pack.read sorts).
 local function dataFiles(fs, dir, prefix, out)
   for _, name in ipairs(fs.list(dir) or {}) do
     local path = dir .. "/" .. name
@@ -296,7 +296,12 @@ function Pack.read(fs, libs, packsDir, id, seen)
   end
 
   local files = meta.files
-  if type(files) ~= "table" then files = dataFiles(fs, dir, "", {}) end
+  if type(files) ~= "table" then
+    -- sort whole paths, as lpk.py does: listing folder by folder would put
+    -- "dex/a.csv" before "dex.csv"
+    files = dataFiles(fs, dir, "", {})
+    table.sort(files)
+  end
   for _, rel in ipairs(files) do
     local path = dir .. "/" .. rel
     local body = fs.read(path)

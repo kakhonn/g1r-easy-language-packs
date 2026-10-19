@@ -52,7 +52,8 @@ packs/es/
   names.json
 ```
 
-All `.csv`, `.tsv` and `.json` files are read in alphabetical order (subfolders
+All `.csv`, `.tsv` and `.json` files are read in alphabetical order of their
+path inside the pack, so `dex.csv` comes before `dex/more.csv` (subfolders
 starting with `_` or `.` are skipped). When the same key appears twice, the
 later file wins. To set the order yourself, list `"files"` in `pack.json`.
 
