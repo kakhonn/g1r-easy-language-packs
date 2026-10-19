@@ -1,0 +1,9 @@
+{
+  "_comment": "Sectioned by kind. Keys are the game's ids (moves/items/species/trainers/statuses) or text labels (dialogue).",
+  "moves":   { "TACKLE": "BROADSIDE" },
+  "items":   { "POTION": "GROG" },
+  "species": { "PIKACHU": "SPARKY" },
+  "dialogue": {
+    "_PalletTownSignText": "PALLET PORT\nShades of yer\vfirst voyage"
+  }
+}

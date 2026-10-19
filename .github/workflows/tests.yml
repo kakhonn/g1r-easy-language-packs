@@ -1,0 +1,32 @@
+name: Tests
+
+# Runs the ROM-free test suite against a checkout of the engine.  No ROM
+# data is involved: the Lua tests use synthetic records and the engine's own
+# tests/fixture_data.
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout mod
+        uses: actions/checkout@v4
+
+      - name: Checkout engine
+        uses: actions/checkout@v4
+        with:
+          repository: bryanthaboi/gen1recomp
+          path: _engine
+          # The engine's public branch; pin a commit here if an engine change
+          # ever needs investigating separately from a mod change.
+          ref: dev
+
+      - name: Install LuaJIT
+        run: sudo apt-get update && sudo apt-get install -y luajit
+
+      - name: Run tests
+        run: python3 tests/run.py --engine _engine

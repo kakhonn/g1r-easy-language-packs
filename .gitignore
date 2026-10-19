@@ -1,0 +1,12 @@
+# Translation sheets carry an "english" column of text from the ROMs: only the
+# hand-written sample pack belongs in the repository.
+packs/*
+!packs/_example/
+language_templates/
+_orphaned/
+dist/
+
+__pycache__/
+*.pyc
+.vscode/
+.luarc.json

@@ -1,0 +1,9 @@
+key,text,notes
+"%s wants\nto fight!","%s be wantin'\nto scrap!",trainer battle intro
+"%s grew\nto level %d!","%s be growin'\nto level %d! Arr!",keep both directives
+"%s gained\n%d EXP. Points!","%s plundered\n%d EXP. Points!",
+"Would you like to\nSAVE the game?","Stow yer progress\nin the hold?",
+"Now saving...","Stowin' it...",
+"%s saved\nthe game!","%s stowed\nthe booty!",
+"SAVE","STOW",start menu - keep short
+"No! There's no\nrunning from a\vtrainer battle!","Belay that! No\nfleein' a\vcaptain's duel!",\v is a scrolling line

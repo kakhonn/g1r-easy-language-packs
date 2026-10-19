@@ -1,0 +1,25 @@
+{
+  "id": "easy_language_packs",
+  "name": "Easy Language Packs",
+  "version": "1.0.0",
+  "api": 2,
+  "entry": "main.lua",
+  "profile": "content",
+  "category": "UI",
+  "games": [
+    "gen1",
+    "gen2"
+  ],
+  "game_version": ">=0.0.0-0 <2.0.0",
+  "priority": 100,
+  "permissions": [
+    "engine_internals"
+  ],
+  "github": "kakhonn/g1r-easy-language-packs",
+  "dependencies": [],
+  "optional_dependencies": [],
+  "conflicts": [
+    "language_pack"
+  ],
+  "description": "Play in your own language: translations come from simple CSV or JSON packs, and OPTIONS > LANGUAGE switches between them instantly. Includes lpk.py for making your own pack."
+}

@@ -1,0 +1,7 @@
+{
+  "name": "Pirate (example)",
+  "label": "PIRATE",
+  "example": true,
+  "author": "you",
+  "_comment": "font: omit for the vanilla glyphs, \"pixel\" for the bundled Unicode TTF, or {\"file\": \"x.ttf\", \"size\": 15}. extends: another pack id to inherit from."
+}
