@@ -19,6 +19,55 @@ This is a vibe-coded project, written with Claude (Anthropic's AI). See
 - `tools/lpk.py` builds ready-to-translate spreadsheets from the games you've
   imported, checks your work, and strips ROM text before you share a pack.
 
+## Quick start: make a language pack
+
+1. [Install the mod](#install), and import the games you want to translate.
+2. Open a command prompt in the mod's `tools` folder,
+   `<game folder>\mods\easy_language_packs\tools`. (In File Explorer, open
+   the folder, type `cmd` in the address bar and press Enter.)
+3. Run this, with your game folder, language and name filled in:
+
+   ```
+   py lpk.py split --game "C:\path\to\gen1recomp" -o ..\packs\es --name "Español" --author "You"
+   ```
+
+   This makes `packs\es\`: a template organized by generation, with the text
+   of every game you've imported.
+4. Open any sheet in your spreadsheet app and fill in the `text` column.
+   Leave the other columns alone. Anything left blank stays in English.
+5. Pack settings are in `packs\es\pack.json`, including the name the
+   **OPTIONS > LANGUAGE** menu shows (`label`). If your language needs
+   accents or non-Latin letters, set `"font": "pixel"`.
+6. In the game, pick your language under **OPTIONS > LANGUAGE**.
+
+Updating the mod replaces its folder, packs included, so keep a copy of your
+pack somewhere else. If your game isn't a portable install, your imported
+games are in `%APPDATA%\LOVE\pokemon-love2d`: add
+`--cache "%APPDATA%\LOVE\pokemon-love2d"` to the command.
+
+## Share your pack
+
+The sheets' `english` column is text from your game files, so don't share
+the pack folder as it is. From the same `tools` folder:
+
+1. Check it for mistakes:
+
+   ```
+   py lpk.py check ..\packs\es --game "C:\path\to\gen1recomp"
+   ```
+
+2. Make a copy that's safe to share. It leaves out the English, your notes
+   and untranslated rows:
+
+   ```
+   py lpk.py release ..\packs\es -o "C:\path\to\share\es"
+   ```
+
+   Put the copy outside `packs\`, or the game will list it as a second pack.
+3. Zip the `es` folder and share it. Players install the mod, then unzip
+   your pack into `mods\easy_language_packs\packs\`, so its files end up
+   in `packs\es\`.
+
 ## Install
 
 1. Download the latest `easy_language_packs-X.Y.Z.zip` from
