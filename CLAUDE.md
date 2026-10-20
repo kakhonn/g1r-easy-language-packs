@@ -70,7 +70,8 @@ deploy.py           copy the mod into a game install for testing
 5. Run `py tests/run.py --engine <gen1recomp checkout>` before committing.
    Add a test for every behaviour change.
 6. Don't push to `main` casually: **every push that touches the mod cuts a
-   GitHub release** (see Releasing).
+   public release, which players' launchers offer as an update** (see
+   Releasing).
 
 ## How the mod works
 
@@ -274,9 +275,11 @@ tests, all passing, against engine `dev` 48a7139 (2026-10-20).
 on push to `main` (ignoring `**.md`, `.github/**`, `tests/**`, `deploy.py`)
 it packs a zip with `git archive` and publishes `vX.Y.Z`. Version = manifest
 version if ahead of the newest tag, else newest tag's patch + 1. Commit
-locally, push when a release is wanted. The manifest's `github` field
-enables update checks in the game's launcher, which needs a **public** repo
-(it starts private).
+locally, push when a release is wanted. The repo is **public** (since
+2026-10-20), and the manifest's `github` field drives the game launcher's
+update checks. So a release reaches players as soon as it's published:
+bump the version on purpose, and keep `main` releasable. Everything pushed
+(branches, PR text) is public too.
 
 ## Testing in a game install
 
