@@ -309,3 +309,17 @@ enables update checks in the game's launcher, which needs a **public** repo
    checks); text-box preview page; `lpk.py draft` (local-model pre-fill,
    marked for review); untranslated-text audit (move/item descriptions,
    Gen 2 landmark names, type names, individual trainer names).
+5. **Place names, then a glossary** (owner's idea, 2026-10-20). Names that
+   the game fills in (`text_ram`, `{STR_VAR_1}`, `{B_…}`) already come from
+   the names sheets. Most other mentions ("VIRIDIAN CITY" on a sign) are
+   typed out in each line, even in pret's source, so the mod can't swap them.
+   - **Place names:** a sheet for Town Map / location names (pokered
+     `data/maps/names.asm`, Gen 2 landmarks, Gen 3 region-map sections),
+     shown on the Town Map, in location pop-ups and on the Pokédex area
+     screen. Do this first.
+   - **Glossary:** a `Glossary.csv` of term → translation. It's seeded from
+     the translated names sheets plus the translator's own terms. `check`
+     warns when a line's English contains a term but its translation lacks
+     the glossary's version, and `split` can list each line's terms in a
+     column. Never auto-replace terms at runtime: grammar changes around
+     names (articles, gender, case), so lines would come out half-English.
