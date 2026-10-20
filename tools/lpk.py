@@ -15,14 +15,16 @@ Standard library only.  Three commands:
             are longer than the English and may overflow the text box,
             and how much is translated.
 
-  release   Copy a pack for distribution with the English / notes columns
-            stripped.  The English for dialogue and names comes out of
-            the ROM, so it should not be shipped.
+  release   Package a pack as its own mod (elp_<id>-<version>.zip) that
+            players import with MODS > Import mod .zip, with the English /
+            notes columns and untranslated rows stripped.  The English for
+            dialogue and names comes out of the ROM, so it should not be
+            shipped.  --folder writes a plain pack folder instead.
 
 Examples (Windows):
   py lpk.py template --game "C:\\Games\\gen1recomp" -o es.csv
   py lpk.py check ..\\packs\\es --game "C:\\Games\\gen1recomp"
-  py lpk.py release ..\\packs\\es -o dist\\es
+  py lpk.py release ..\\packs\\es -o dist
 """
 
 import argparse
@@ -34,6 +36,8 @@ import os
 import re
 import shutil
 import sys
+import tempfile
+import zipfile
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import lpk_layout  # noqa: E402  (where split puts each row; lives next to this file)
@@ -1613,6 +1617,11 @@ def pack_json_template(name, label, author):
         "author": author,
         "_comment_author": "Credit for the translation.",
         "version": "0.1.0",
+        "_comment_version": "Raise it each time you share an update: `lpk.py release` names the "
+                            "pack mod after it, and players' games compare it.",
+        "mod_name": "",
+        "_comment_mod_name": "The name `lpk.py release` gives your pack in the Mod Manager. "
+                             "Leave \"\" for \"<name> (ELP generated)\".",
         "font": "",
         "_comment_font": "Leave \"\" for the game's original font (A-Z, no accents). "
                          "\"pixel\" switches to the bundled font with accents, Cyrillic, kana and CJK. "
@@ -1799,14 +1808,63 @@ def cmd_split(args):
 
 # --------------------------------------------------------------- release
 
-def cmd_release(args):
-    src = os.path.abspath(args.pack.rstrip("/\\"))
-    dst = os.path.abspath(args.output)
-    if os.path.exists(dst):
-        if not args.force:
-            print(f"lpk: {dst} exists (use --force)", file=sys.stderr)
-            return 2
-        shutil.rmtree(dst)
+# A released pack is a mod of its own (elp_<pack id>) that depends on this
+# one, so updating Easy Language Packs never touches it.  Its main.lua is
+# tools/pack_mod_main.lua, which hands the pack to registerPack (pack api 1,
+# added in 1.2.0).
+LOADER_ID = "easy_language_packs"
+LOADER_REPO = "kakhonn/g1r-easy-language-packs"
+PACK_API_SINCE = "1.2.0"
+PACK_MOD_PREFIX = "elp_"
+PACK_MOD_MAIN = os.path.join(os.path.dirname(os.path.abspath(__file__)), "pack_mod_main.lua")
+_MOD_ID_RE = re.compile(r"^[a-z0-9_-]+$")
+_VERSION_RE = re.compile(r"^\d+\.\d+\.\d+([-+][0-9A-Za-z.+-]*)?$")
+
+
+def _loader_manifest():
+    """This mod's manifest (lpk.py ships in its tools/), for the games and
+    engine range a pack mod should match; defaults when lpk.py runs alone."""
+    path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "manifest.json")
+    try:
+        with open(path, encoding="utf-8-sig") as fh:
+            m = json.load(fh)
+    except (OSError, ValueError):
+        m = {}
+    if m.get("id") != LOADER_ID:
+        m = {}
+    return {"games": m.get("games") or ["gen1", "gen2"],
+            "game_version": m.get("game_version") or ">=0.0.0-0 <2.0.0"}
+
+
+def pack_mod_manifest(pack_id, meta, github=None):
+    name = meta.get("name") if isinstance(meta.get("name"), str) and meta.get("name").strip() else pack_id
+    mod_name = meta.get("mod_name")
+    if not (isinstance(mod_name, str) and mod_name.strip()):
+        mod_name = f"{name} (ELP generated)"
+    author = meta.get("author") if isinstance(meta.get("author"), str) else ""
+    loader = _loader_manifest()
+    manifest = {
+        "id": PACK_MOD_PREFIX + pack_id,
+        "name": mod_name.strip(),
+        "version": meta["version"],
+        "api": 2,
+        "entry": "main.lua",
+        "profile": "content",
+        "category": "UI",
+        "games": loader["games"],
+        "game_version": loader["game_version"],
+        "dependencies": [f"{LOADER_ID}@^{PACK_API_SINCE}#{LOADER_REPO}"],
+        "description": f"{name} for Easy Language Packs" + (f", by {author.strip()}" if author.strip() else "")
+                       + ". Made with lpk.py; pick it under OPTIONS > LANGUAGE.",
+    }
+    if github:
+        manifest["github"] = github
+    return manifest
+
+
+def _strip_pack(src, dst):
+    """Copy a pack without its reference columns, untranslated rows and
+    working folders; returns how many data files were stripped."""
     stripped = 0
     for root, dirs, names in os.walk(src):
         # _orphaned/, _lpk/ and the like are working files the mod never loads
@@ -1852,11 +1910,86 @@ def cmd_release(args):
                 stripped += 1
             else:
                 shutil.copy2(s, d)
-    print(f"wrote {dst} ({stripped} data files stripped of reference columns and empty rows)")
+    return stripped
+
+
+def cmd_release(args):
+    src = os.path.abspath(args.pack.rstrip("/\\"))
+    if not os.path.isdir(src):
+        print(f"lpk: {src} is not a pack folder", file=sys.stderr)
+        return 2
+    if args.folder:
+        dst = os.path.abspath(args.output)
+        if os.path.exists(dst):
+            if not args.force:
+                print(f"lpk: {dst} exists (use --force)", file=sys.stderr)
+                return 2
+            shutil.rmtree(dst)
+        stripped = _strip_pack(src, dst)
+        print(f"wrote {dst} ({stripped} data files stripped of reference columns and empty rows)")
+        return 0
+
+    pack_id = args.id or os.path.basename(src)
+    if not _MOD_ID_RE.match(pack_id):
+        print(f"lpk: '{pack_id}' can't be part of a mod id (use lowercase a-z, 0-9, _ and -); "
+              "pass --id, e.g. --id es", file=sys.stderr)
+        return 2
+    try:
+        with open(os.path.join(src, "pack.json"), encoding="utf-8-sig") as fh:
+            meta = json.load(fh)
+    except FileNotFoundError:
+        meta = {}
+    except ValueError as e:
+        print(f"lpk: pack.json: {e}", file=sys.stderr)
+        return 2
+    if not isinstance(meta, dict):
+        meta = {}
+    version = meta.get("version")
+    if not (isinstance(version, str) and _VERSION_RE.match(version.strip())):
+        print('lpk: set "version" in pack.json (e.g. "0.1.0"); the pack mod is versioned by it',
+              file=sys.stderr)
+        return 2
+    meta["version"] = version.strip()
+    manifest = pack_mod_manifest(pack_id, meta, args.github)
+    mod_id = manifest["id"]
+
+    out = os.path.abspath(args.output)
+    zip_path = out if out.lower().endswith(".zip") else os.path.join(out, f"{mod_id}-{meta['version']}.zip")
+    if os.path.exists(zip_path) and not args.force:
+        print(f"lpk: {zip_path} exists (use --force, or raise \"version\" in pack.json)", file=sys.stderr)
+        return 2
+    with open(PACK_MOD_MAIN, encoding="utf-8") as fh:
+        main_lua = fh.read()
+    with tempfile.TemporaryDirectory() as tmp:
+        stage = os.path.join(tmp, mod_id)
+        stripped = _strip_pack(src, os.path.join(stage, "pack"))
+        with open(os.path.join(stage, "manifest.json"), "w", encoding="utf-8", newline="\n") as fh:
+            json.dump(manifest, fh, ensure_ascii=False, indent=2)
+            fh.write("\n")
+        with open(os.path.join(stage, "main.lua"), "w", encoding="utf-8", newline="\n") as fh:
+            fh.write(main_lua)
+        os.makedirs(os.path.dirname(zip_path), exist_ok=True)
+        # one top folder, as the game's Import mod .zip expects
+        with zipfile.ZipFile(zip_path + ".tmp", "w", zipfile.ZIP_DEFLATED) as z:
+            for root, dirs, names in os.walk(stage):
+                dirs.sort()
+                for name in sorted(names):
+                    full = os.path.join(root, name)
+                    z.write(full, os.path.relpath(full, tmp).replace(os.sep, "/"))
+        os.replace(zip_path + ".tmp", zip_path)
+    print(f"wrote {zip_path}: mod {mod_id} {meta['version']} \"{manifest['name']}\" "
+          f"({stripped} data files stripped of reference columns and empty rows)")
+    print("players import it in the game: MODS > Import mod .zip "
+          "(it needs Easy Language Packs " + PACK_API_SINCE + " or newer)")
     return 0
 
 
 def main(argv=None):
+    # a pack's name can be any script; output redirected to a file on Windows
+    # uses the ANSI code page, which would otherwise crash on it
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(errors="backslashreplace")
     p = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     sub = p.add_subparsers(dest="cmd", required=True)
 
@@ -1911,10 +2044,16 @@ def main(argv=None):
     c.add_argument("pack", help="the pack folder (packs/<id>)")
     sources(c)
 
-    r = sub.add_parser("release", help="copy a pack without English/notes columns")
-    r.add_argument("pack")
-    r.add_argument("-o", "--output", required=True)
-    r.add_argument("--force", action="store_true")
+    r = sub.add_parser("release", help="make a shareable pack mod .zip (no English/notes columns)")
+    r.add_argument("pack", help="the pack folder (packs/<id>)")
+    r.add_argument("-o", "--output", required=True,
+                   help="folder for elp_<id>-<version>.zip (or a .zip path); with --folder, the copy's folder")
+    r.add_argument("--folder", action="store_true",
+                   help="write a plain pack folder instead of a mod .zip")
+    r.add_argument("--id", help="pack id, so the mod is elp_<id> (default: the pack folder's name)")
+    r.add_argument("--github", metavar="OWNER/REPO",
+                   help="your repository, for the game's update checks on your pack")
+    r.add_argument("--force", action="store_true", help="replace an existing output")
 
     args = p.parse_args(argv)
     return {"template": cmd_template, "split": cmd_split, "check": cmd_check,

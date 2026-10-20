@@ -309,7 +309,7 @@ class Split(SplitCase):
         self.save(self.path("01_red_blue.csv"), data)
         self.assertEqual(quiet(lpk.main, ["check", self.out]), 0)
         dist = os.path.join(self.tmp, "dist")
-        self.assertEqual(quiet(lpk.main, ["release", self.out, "-o", dist]), 0)
+        self.assertEqual(quiet(lpk.main, ["release", self.out, "-o", dist, "--folder"]), 0)
         released = rows(os.path.join(dist, "01_red_blue.csv"))
         self.assertEqual(len(released), 2, "untranslated rows are dropped")
         self.assertNotIn("english", released[0], "the ROM-text column is stripped")
@@ -465,7 +465,7 @@ class SplitLayout(SplitCase):
         self.split()
         self.assertTrue(os.path.isdir(os.path.join(self.out, "_orphaned")))
         dist = os.path.join(self.tmp, "dist")
-        self.assertEqual(quiet(lpk.main, ["release", self.out, "-o", dist]), 0)
+        self.assertEqual(quiet(lpk.main, ["release", self.out, "-o", dist, "--folder"]), 0)
         self.assertFalse(os.path.exists(os.path.join(dist, "_orphaned")))
         self.assertFalse(os.path.exists(os.path.join(dist, "_lpk")))
         self.assertTrue(os.path.isfile(os.path.join(dist, "pack.json")))
@@ -580,6 +580,82 @@ class Gen3Layout(SplitCase):
         self.assertEqual(self.find("001", kind="dex_kind"), "G3/RSE/Pokedex/categories.csv",
                          "only Ruby/Emerald's Pokedex is imported here, so the categories are RSE's")
         self.assertEqual(quiet(lpk.main, ["check", self.out]), 0)
+
+
+class PackMod(unittest.TestCase):
+    """`release` packages a pack as its own mod, elp_<id>-<version>.zip."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp)
+        self.pack = os.path.join(self.tmp, "packs", "es")
+        self.dist = os.path.join(self.tmp, "dist")
+        self.meta = {"name": "Español", "label": "ESPANOL", "author": "Ana", "version": "0.2.0",
+                     "mod_name": "", "_comment_name": "ignored"}
+        self.write_pack()
+
+    def write_pack(self):
+        os.makedirs(os.path.join(self.pack, "G1", "Names"), exist_ok=True)
+        os.makedirs(os.path.join(self.pack, "_orphaned"), exist_ok=True)
+        with open(os.path.join(self.pack, "pack.json"), "w", encoding="utf-8") as fh:
+            json.dump(self.meta, fh, ensure_ascii=False)
+        with open(os.path.join(self.pack, "G1", "Names", "moves.csv"), "w", encoding="utf-8", newline="") as fh:
+            fh.write("kind,key,game,english,text,versions,notes\n"
+                     "moves,TACKLE,gen1,TACKLE,PLACAJE,,\nmoves,EMBER,gen1,EMBER,,,\n")
+        with open(os.path.join(self.pack, "_orphaned", "old.csv"), "w", encoding="utf-8") as fh:
+            fh.write("kind,key,text\nmoves,GONE,X\n")
+
+    def release(self, *extra):
+        return quiet(lpk.main, ["release", self.pack, "-o", self.dist, *extra])
+
+    def zipped(self, name="elp_es-0.2.0.zip"):
+        with zipfile.ZipFile(os.path.join(self.dist, name)) as z:
+            return {n: z.read(n) for n in z.namelist()}
+
+    def test_zip_is_an_importable_mod(self):
+        self.assertEqual(self.release(), 0)
+        files = self.zipped()
+        self.assertEqual({n.split("/")[0] for n in files}, {"elp_es"}, "one top folder")
+        self.assertEqual(sorted(files), ["elp_es/main.lua", "elp_es/manifest.json",
+                                         "elp_es/pack/G1/Names/moves.csv", "elp_es/pack/pack.json"],
+                         "working folders like _orphaned stay out")
+        m = json.loads(files["elp_es/manifest.json"])
+        self.assertEqual((m["id"], m["version"], m["entry"], m["api"]), ("elp_es", "0.2.0", "main.lua", 2))
+        self.assertEqual(m["name"], "Español (ELP generated)")
+        self.assertEqual(m["dependencies"], ["easy_language_packs@^1.2.0#kakhonn/g1r-easy-language-packs"])
+        with open(os.path.join(ROOT, "manifest.json"), encoding="utf-8") as fh:
+            loader = json.load(fh)
+        self.assertEqual(m["games"], loader["games"], "same games as Easy Language Packs")
+        self.assertEqual(m["game_version"], loader["game_version"])
+        self.assertIn("Ana", m["description"])
+        self.assertNotIn("github", m)
+        with open(os.path.join(ROOT, "tools", "pack_mod_main.lua"), "rb") as fh:
+            self.assertEqual(files["elp_es/main.lua"].replace(b"\r\n", b"\n"),
+                             fh.read().replace(b"\r\n", b"\n"))
+        released = list(csv.DictReader(io.StringIO(files["elp_es/pack/G1/Names/moves.csv"].decode("utf-8-sig"))))
+        self.assertEqual([r["key"] for r in released], ["TACKLE"], "untranslated rows are dropped")
+        self.assertNotIn("english", released[0], "the ROM-text column is stripped")
+
+    def test_mod_name_github_and_id(self):
+        self.meta["mod_name"] = "Spanish by Ana"
+        self.write_pack()
+        self.assertEqual(self.release("--id", "es_ana", "--github", "ana/es-pack"), 0)
+        m = json.loads(self.zipped("elp_es_ana-0.2.0.zip")["elp_es_ana/manifest.json"])
+        self.assertEqual((m["id"], m["name"], m["github"]), ("elp_es_ana", "Spanish by Ana", "ana/es-pack"))
+
+    def test_refusals(self):
+        self.assertEqual(self.release(), 0)
+        self.assertEqual(self.release(), 2, "an existing zip needs --force or a new version")
+        self.assertEqual(self.release("--force"), 0)
+        self.assertEqual(self.release("--id", "Español"), 2, "the id must be a valid mod id")
+        del self.meta["version"]
+        self.write_pack()
+        self.assertEqual(self.release("--force"), 2, "pack.json needs a version")
+
+    def test_split_template_has_mod_name(self):
+        meta = lpk.pack_json_template("Español", "ESPANOL", "Ana")
+        self.assertEqual(meta["mod_name"], "")
+        self.assertEqual(lpk.pack_mod_manifest("es", meta)["name"], "Español (ELP generated)")
 
 
 class EngineDownload(unittest.TestCase):

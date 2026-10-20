@@ -40,8 +40,12 @@ H.slurp = slurp
 
 -- the mod as the game would see it: tracked mod files, no tooling
 local SKIP = { ["tests/"] = true, [".github/"] = true, [".git/"] = true }
-local function modFiles(extra)
+local function modFiles(extra, mods)
   local files = {}
+  -- other installed mods (pack mods): { [mod id] = { [path] = body } }
+  for id, tree in pairs(mods or {}) do
+    for k, v in pairs(tree) do files["mods/" .. id .. "/" .. k] = v end
+  end
   local cmd = ('cd "%s" && find . -type f'):format(H.MOD)
   for rel in io.popen(cmd):lines() do
     rel = rel:sub(3)
@@ -83,14 +87,15 @@ local function memfs(files)
 end
 
 -- Boot: load the mod, then fire game.ready the way Game.lua / Game2.lua do.
--- opts: gen (1|2), version, language (saved choice), extra (pack files)
+-- opts: gen (1|2), version, language (saved choice), extra (files added to
+-- this mod, e.g. packs/), mods (other mods: { [id] = { [path] = body } })
 function H.boot(data, opts)
   opts = opts or {}
   local real = SaveData.loadOptions
   SaveData.loadOptions = function()
     return { modOptions = opts.language and { [H.ID] = { language = opts.language } } or {} }
   end
-  local loader = Loader.new({ fs = memfs(modFiles(opts.extra)), generation = opts.gen or 1,
+  local loader = Loader.new({ fs = memfs(modFiles(opts.extra, opts.mods)), generation = opts.gen or 1,
                               version = opts.version or "red" })
   local G = { data = data, save = { options = { modOptions = {} } }, writes = 0 }
   G.writeOptions = function(self) self.writes = self.writes + 1 end
@@ -146,6 +151,21 @@ function H.diff(a, b, path)
   for k in pairs(b) do
     if a[k] == nil then return path .. "." .. tostring(k) .. ": extra" end
   end
+end
+
+-- A pack mod as `lpk.py release` writes it: its manifest, the generated
+-- main.lua (tools/pack_mod_main.lua) and the pack under pack/.
+-- files: { [path inside the pack] = body }; opts: version, needs, id
+function H.packMod(files, opts)
+  opts = opts or {}
+  local manifest = ('{"id":"%s","name":"pack","version":"0.1.0","api":2,"entry":"main.lua",'
+    .. '"profile":"content","category":"UI","games":["gen1","gen2"],'
+    .. '"game_version":">=0.0.0-0 <2.0.0","dependencies":["%s@%s"]}')
+    :format(opts.id or "elp_test", H.ID, opts.needs or "^1.2.0")
+  local tree = { ["manifest.json"] = manifest,
+                 ["main.lua"] = slurp(H.MOD .. "/tools/pack_mod_main.lua") }
+  for k, v in pairs(files) do tree["pack/" .. k] = v end
+  return tree
 end
 
 -- the mod's own hash, for building version-pinned keys in tests

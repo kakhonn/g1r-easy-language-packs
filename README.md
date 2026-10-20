@@ -40,8 +40,9 @@ This is a vibe-coded project, written with Claude (Anthropic's AI). See
    accents or non-Latin letters, set `"font": "pixel"`.
 6. In the game, pick your language under **OPTIONS > LANGUAGE**.
 
-Updating the mod replaces its folder, packs included, so keep a copy of your
-pack somewhere else. If your game isn't a portable install, your imported
+Updating the mod replaces its folder, `packs\` included, so keep a copy of
+your working pack somewhere else. A released pack (below) is a mod of its
+own, and updates leave it alone. If your game isn't a portable install, your imported
 games are in `%APPDATA%\LOVE\pokemon-love2d`: add
 `--cache "%APPDATA%\LOVE\pokemon-love2d"` to the command.
 
@@ -56,30 +57,38 @@ the pack folder as it is. From the same `tools` folder:
    py lpk.py check ..\packs\es --game "C:\path\to\gen1recomp"
    ```
 
-2. Make a copy that's safe to share. It leaves out the English, your notes
-   and untranslated rows:
+2. Package it as a mod. This leaves out the English, your notes and
+   untranslated rows:
 
    ```
-   py lpk.py release ..\packs\es -o "C:\path\to\share\es"
+   py lpk.py release ..\packs\es -o "C:\path\to\share"
    ```
 
-   Put the copy outside `packs\`, or the game will list it as a second pack.
-3. Zip the `es` folder and share it. Players install the mod, then unzip
-   your pack into `mods\easy_language_packs\packs\`, so its files end up
-   in `packs\es\`.
+   It writes `elp_es-0.1.0.zip`, named after the `version` in `pack.json`.
+3. Share the zip. Players import it in the game with **MODS > Import mod
+   .zip**, like any mod (they need Easy Language Packs 1.2.0 or newer).
+   It shows in the Mod Manager as "Español (ELP generated)"; set
+   `mod_name` in `pack.json` to call it something else.
+
+To share an update, raise `version` in `pack.json` and release again;
+players import the new zip over the old one.
 
 ## Install
 
 1. Download the latest `easy_language_packs-X.Y.Z.zip` from
    [Releases](https://github.com/kakhonn/g1r-easy-language-packs/releases).
 2. In the game: **MODS > Import mod .zip** and pick it.
-3. Put a language pack folder in `mods/easy_language_packs/packs/`
-   (e.g. `packs/es/`). On a portable install, `mods` is inside the game folder.
+3. Add a language: import its `elp_<id>-X.Y.Z.zip` the same way. A pack
+   folder works too: put it in `mods/easy_language_packs/packs/` (e.g.
+   `packs/es/`). On a portable install, `mods` is inside the game folder.
 4. **OPTIONS > LANGUAGE**: press LEFT/RIGHT (or A) to cycle through ENGLISH and
    your packs. The same setting is also on the mod's page in the Mod Manager.
 
-Re-importing or updating the mod replaces its folder, packs included. Keep
-your packs backed up somewhere else.
+Re-importing or updating the mod replaces its folder, `packs/` included, so
+keep pack folders backed up somewhere else. Imported language packs are
+mods of their own, and updates leave them alone. When a folder in `packs/`
+has the same id as an imported pack (`packs/es` and `elp_es`), the folder
+wins, so a translator can test changes to a released pack.
 
 The first pack that isn't marked `"example": true` is selected automatically,
 so a build that ships one language works without touching options.
@@ -95,7 +104,7 @@ restart to appear in the list.
 
 ```
 packs/es/
-  pack.json        optional: name, font, inheritance
+  pack.json        optional: name, font, inheritance, release settings
   strings.csv      any number of .csv / .tsv / .json files, in any subfolders
   dialogue.json
   names.json
@@ -123,7 +132,9 @@ later file wins. To set the order yourself, list `"files"` in `pack.json`.
 | `name` | display name |
 | `label` | what the LANGUAGE option shows. Keep it plain A-Z, because the option menu draws with the vanilla font |
 | `font` | omit to keep the vanilla glyphs (A-Z, a few symbols, no accents). `"pixel"` switches to the engine's bundled Plain Pixel TTF (Latin + diacritics, Cyrillic, kana, CJK). `{ "file": "myfont.ttf", "size": 15, "spacing": 0, "yOffset": -6, "bold": true }` uses your own TTF from the pack folder |
-| `extends` | pack id (or list of ids) to inherit from. A regional variant (`es_mx` extends `es`) only needs the lines that differ |
+| `extends` | pack id (or list of ids) to inherit from. A regional variant (`es_mx` extends `es`) only needs the lines that differ. The base can be a folder or an imported pack |
+| `author`, `version` | credit, and the version `lpk.py release` gives the pack mod (raise it for each update you share) |
+| `mod_name` | the pack mod's name in the Mod Manager; blank = "<name> (ELP generated)" |
 | `files` | explicit file list/order, relative to the pack folder |
 | `glyph_pages`, `charmap` | hand-drawn 8x8 glyph sheets, same shape as modkit's `lang/font.lua` / `lang/charmap.lua`; image paths are relative to the pack |
 | `naming` | `{ "upper": [[...rows...]], "lower": [...] }` letter grid for the name-entry screen |
@@ -314,12 +325,24 @@ py tools\lpk.py check packs\es --game "C:\path\to\gen1recomp"
 ```
 
 **Release a pack:** the template's `english` column holds text from your ROM.
-Don't ship it. This copies the pack with reference columns and untranslated
-rows removed:
+Don't ship it. This packages the pack as its own mod, with reference columns
+and untranslated rows removed:
 
 ```
-py tools\lpk.py release packs\es -o dist\es
+py tools\lpk.py release packs\es -o dist
 ```
+
+- It writes `dist\elp_es-<version>.zip`. Inside are a `manifest.json`, a
+  small `main.lua` that hands the pack to Easy Language Packs (a mod can only
+  read its own folder) and the pack itself under `pack\`. The pack mod
+  depends on Easy Language Packs 1.2.0 or newer, so the game loads that first.
+- The version comes from `pack.json`, which must have one. `--force`
+  replaces a zip that's already there.
+- `--id es_ana` makes the mod `elp_es_ana` instead of `elp_` + the folder's
+  name, for a second pack of the same language.
+- `--github you/your-repo` lets the game's launcher check your releases for
+  updates.
+- `--folder -o dist\es` writes a plain pack folder instead of a zip.
 
 ## Notes
 
