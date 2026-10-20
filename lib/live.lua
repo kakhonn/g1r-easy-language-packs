@@ -11,6 +11,11 @@
 --          data.moves / items / trainers [id].name, data.statuses[id].label
 --   Gen 2  data.gen2Text (script text) + data.text (label-keyed prose),
 --          data.gen2Pokedex.entries[id], data.gen2Trainers.classes[id]
+--   Gen 3  everything through a view main.lua builds from the engine (`g3`):
+--          g3.text = the script bundle's text (label -> segment list),
+--          g3.source / g3.parse convert a line to and from the sheet's
+--          string (lib/g3text.lua), g3.slot(kind, id) -> table, field for
+--          names and Pokedex text
 local Live = {}
 Live.__index = Live
 
@@ -21,11 +26,24 @@ local function splitKey(key)
 end
 Live.splitKey = splitKey
 
-function Live.new(data, gen, hash)
-  local self = setmetatable({ data = data, gen = gen, hash = hash.fnv1a,
+function Live.new(data, gen, hash, g3)
+  local self = setmetatable({ data = data, gen = gen, hash = hash.fnv1a, g3 = g3,
                               saved = {}, order = {}, index = nil }, Live)
   if type(data.strings) ~= "table" then data.strings = {} end
   return self
+end
+
+-- a dialogue value as the sheet's English (Gen 3 keeps segment lists)
+function Live:english(v)
+  if self.g3 and type(v) == "table" then return self.g3.source(v) end
+  if type(v) == "string" then return v end
+  return nil
+end
+
+-- a translation as the dialogue table stores it
+function Live:dialogueValue(text)
+  if self.g3 then return self.g3.parse(text) end
+  return text
 end
 
 -- ---- slots --------------------------------------------------------------
@@ -69,6 +87,7 @@ end
 
 function Live:dialogueTables()
   local d = self.data
+  if self.g3 then return { self.g3.text } end
   if self.gen == "gen2" then
     return { d.gen2Text, d.text }
   end
@@ -83,8 +102,8 @@ function Live:hashIndex()
   for _, tbl in ipairs(self:dialogueTables()) do
     if type(tbl) == "table" then
       for label in pairs(tbl) do
-        local v = self:original(tbl, label)
-        if type(v) == "string" and v ~= "" then
+        local v = self:english(self:original(tbl, label))
+        if v and v ~= "" then
           local h = self.hash(v)
           local hits = index[h]
           if not hits then hits = {} index[h] = hits end
@@ -141,27 +160,33 @@ function Live:apply(kind, key, text)
     if id == "" then
       local hits = h and self:hashIndex()[h]
       if not hits then return false, OTHER end
-      for _, hit in ipairs(hits) do self:set(hit[1], hit[2], text) end
+      for _, hit in ipairs(hits) do self:set(hit[1], hit[2], self:dialogueValue(text)) end
       return true
     end
     for _, tbl in ipairs(self:dialogueTables()) do
       if type(tbl) == "table" and self:original(tbl, id) ~= nil then
-        local current = self:original(tbl, id)
-        if h and (type(current) ~= "string" or self.hash(current) ~= h) then
+        local current = self:english(self:original(tbl, id))
+        if h and (not current or self.hash(current) ~= h) then
           return false, OTHER
         end
-        self:set(tbl, id, text)
+        self:set(tbl, id, self:dialogueValue(text))
         return true
       end
     end
     if h then return false, OTHER end
     return false, ("no dialogue label '%s' in this game"):format(id)
   end
-  local rec = self:record(kind, id)
+  local rec, field
+  if self.g3 then
+    rec, field = self.g3.slot(kind, id)
+    if rec == false then return false, "not used in Gen 3" end
+  else
+    rec = self:record(kind, id)
+    field = DEX_FIELD[kind] or NAME_FIELD[kind]
+  end
   if type(rec) ~= "table" then
     return false, ("unknown %s id '%s'"):format(kind, id)
   end
-  local field = DEX_FIELD[kind] or NAME_FIELD[kind]
   if not field then return false, "unknown kind " .. tostring(kind) end
   -- Gen 1 Pokedex entries: dexEntry.text is a label (_MewDexEntry) and the
   -- screen reads data.text[label], so the words go there, not in the field
