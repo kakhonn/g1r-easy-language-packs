@@ -31,6 +31,7 @@ lib/hash.lua        FNV-1a 32-bit -> 8 hex digits (must match lpk.fnv1a)
 lib/csv.lua, json.lua  pure-Lua parsers (the mod sandbox has neither)
 tools/lpk.py        template / split / check / release (Python 3 stdlib only, runs on Windows)
 tools/lpk_layout.py where split puts each row (the pack layout); imported by lpk.py
+tools/pack_mod_main.lua  entry chunk of every pack mod `lpk.py release` writes
 packs/_example/     the only pack allowed in the repo ("Pirate" sample, example: true)
 tests/              ROM-free tests: tests/run.py, tests/lua/*_test.lua, tests/test_lpk.py
 deploy.py           copy the mod into a game install for testing
@@ -85,6 +86,31 @@ re-run `require("src.core.Strings").load(data)` and, if fonts changed,
 The mod declares `engine_internals` (Mod Manager shows "PATCHES ENGINE CODE")
 because it edits live data and reloads engine modules; nothing is written to
 disk except the option value in options.lua.
+
+**Where packs come from.** Two places: folders in this mod's `packs/`, and
+**pack mods** (`elp_<id>`, written by `lpk.py release`), which survive
+updates of this mod because re-importing a zip wipes `mods/<id>/` (only
+`baseroms/` is kept). Engine facts this rests on:
+- A mod can only read its own folder.
+- `mod.find(id).exports` may hold functions.
+- Dependencies load first.
+- `mods.loaded` fires after every entry chunk and right before the engine
+  writes `mod_option_schemas.json` (the Mod Manager's copy).
+- `mod.storage` (per save slot, unavailable before a save loads) and
+  `mod.cache` (rebuildable data only) don't fit packs.
+
+So:
+- A pack mod's `main.lua` (`tools/pack_mod_main.lua`) calls
+  `exports.registerPack{api=1, id, dir="pack", read, list, info,
+  assetPath, mod}` with closures over its own `mod:read`/`mod:list`/
+  `mod:info`/`mod.assets:path`. The pack id is the mod id minus `elp_`.
+- `main.lua` rebuilds the choices on `mods.loaded`, refilling `choices` in
+  place because the row closures hold it, and re-defines the option.
+- A `packs/<id>` folder beats a pack mod with the same id (testing
+  overrides release).
+- `lib/pack.lua` reads every pack through a `locate(id) -> fs, dir`, so
+  `extends` crosses sources.
+- Font files resolve through the source's `assetPath`.
 
 **Why not the content registries?** Registry overrides only apply at boot
 (merged once), so they can't switch live. The first version used them; the
@@ -184,6 +210,17 @@ whole mod.
 - `check` validates syntax, unknown kinds/ids, `%s/%d` arity (engine falls
   back to English on mismatch), `{CONTROL}` and `<NEXT>` codes, line widths
   (18 glyphs Gen 1/2), keys translated two different ways.
+- `release PACK -o DIR` writes `DIR/elp_<id>-<version>.zip`:
+  - **Contents:** one top folder holding `manifest.json`, `main.lua` and the
+    stripped pack under `pack/`.
+  - **Manifest:** the version comes from pack.json (required); the name is
+    pack.json `mod_name`, else "<name> (ELP generated)"; games and
+    game_version are copied from this mod's manifest; it depends on
+    `easy_language_packs@^1.2.0#kakhonn/g1r-easy-language-packs`.
+  - **Options:** `--id`, `--github`, `--force`; `--folder` writes the old
+    plain stripped copy.
+  - **Verified:** a released zip booted through the real Loader, and the
+    importer's `LauncherMods.locateRoot` finds its folder.
 
 ## Testing
 
@@ -196,13 +233,14 @@ py tests/run.py --python-only               # just lpk.py
 Lua tests run from the engine root and boot the mod through the engine's
 real `src.mods.Loader` (sandbox, manifest validation, events, hooks) over an
 in-memory fs (`tests/lua/harness.lua`: `H.boot(data, {gen, version,
-language, extra})`, `H.optionRow`, `H.diff`). `--engine` must be a source
+language, extra, mods})`, `H.packMod`, `H.optionRow`, `H.diff`; `mods`
+installs other mods beside this one). `--engine` must be a source
 checkout: release builds have no `tests/`, and the harness needs the engine's
 `tests/love_stub.lua`.
 
 The mod tracks the latest G1R release, so test against a current engine and
-fix the mod when the engine moves. Last full run: 107 Lua checks + 34 Python
-tests, all passing, against engine `dev` (2026-10-19).
+fix the mod when the engine moves. Last full run: 135 Lua checks + 38 Python
+tests, all passing, against engine `dev` 48a7139 (2026-10-20).
 
 ## Releasing
 
@@ -216,8 +254,9 @@ enables update checks in the game's launcher, which needs a **public** repo
 
 ## Testing in a game install
 
-- Re-importing a mod zip in-game **replaces the whole mod folder, packs
-  included**. Use `deploy.py` for testing; keep packs backed up.
+- Re-importing a mod zip in-game **replaces the whole mod folder, `packs/`
+  included** (pack mods are separate and survive). Use `deploy.py` for
+  testing; keep pack folders backed up.
 - LÖVE doesn't follow symlinks by default, so don't symlink the repo into
   `mods/`.
 - Personal setup notes (where the game is installed, local packs, working
@@ -233,9 +272,7 @@ enables update checks in the game's launcher, which needs a **public** repo
    via `Strings.translateLabel`/`RomText`. Note FRLG and RS sheets share ~2,200
    identical lines (same keys): `check` warns when they're translated
    differently.
-3. **Packs as standalone mods** depending on this one, so updating the loader
-   doesn't wipe packs; `lpk.py release` could emit the importable zip.
-4. **Title graphics**: an `images/` folder in packs. Gen 1 TitleState already
+3. **Title graphics**: an `images/` folder in packs. Gen 1 TitleState already
    supports a continuous `versionRibbon` (via `data.field.boot.title`, drawn
    centered as one piece: the hook is meant for translations); vanilla draws
    fragments at fixed x. Gen 2's title is one composed `title_screen.png`
@@ -244,7 +281,7 @@ enables update checks in the game's launcher, which needs a **public** repo
    (`replace_logo: false` default) plus a player-side toggle, and skip if
    another mod already replaced it. Live swap: find the TitleState on
    `game.stack.states`, replace its image fields, flush Assets.
-5. Launcher translation (write `lang/strings.lua` from the active pack);
+4. Launcher translation (write `lang/strings.lua` from the active pack);
    completion % in the LANGUAGE row; translator workbook (xlsx with length
    checks); text-box preview page; `lpk.py draft` (local-model pre-fill,
    marked for review); untranslated-text audit (move/item descriptions,

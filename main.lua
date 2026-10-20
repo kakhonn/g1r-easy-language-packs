@@ -1,8 +1,9 @@
 -- Easy Language Packs
 --
 -- Replaces the game's text with translations read from JSON or CSV files.
--- Drop a folder into packs/ (see packs/_example and README.md), then pick it
--- under OPTIONS > LANGUAGE.  The switch takes effect immediately.
+-- Drop a folder into packs/ (see packs/_example and README.md), or install a
+-- pack mod made by `lpk.py release`, then pick it under OPTIONS > LANGUAGE.
+-- The switch takes effect immediately.
 --
 -- The pack is applied straight onto the live game data when the game becomes
 -- ready (before the title screen) and again whenever the language changes;
@@ -48,34 +49,120 @@ return function(mod)
   }
 
   -- ---- which languages exist ---------------------------------------------
-  local packs = Pack.list(fs, libs, PACKS)
-  local choices, default = { { "ENGLISH", "off" } }, "off"
-  for _, p in ipairs(packs) do
-    choices[#choices + 1] = { p.label, p.id }
+  -- Packs live in this mod's packs/ folder or in pack mods (`lpk.py release`
+  -- writes them), which survive updates of this mod.  A pack mod depends on
+  -- this one, so it runs later and calls mod.exports.registerPack; the list
+  -- is finished on mods.loaded, after every mod has run and before the
+  -- engine saves the Mod Manager's copy of the options.
+  local here = { fs = fs, assetPath = function(p) return mod.assets:path(p) end }
+  local registered = {} -- { id=, dir=, source=, from= } in registration order
+  local byId = {}       -- pack id -> { id=, label=, example=, dir=, source= }
+  local choices, default = {}, "off"
+  local cache = {}      -- parsed packs: re-selecting a language is instant
+  local finished = false
+
+  local function rebuild()
+    byId, cache = {}, {}
+    local all = {}
+    for _, p in ipairs(Pack.list(fs, libs, PACKS)) do
+      p.dir, p.source = PACKS .. "/" .. p.id, here
+      byId[p.id] = p
+      all[#all + 1] = p
+    end
+    for _, r in ipairs(registered) do
+      local taken = byId[r.id]
+      if taken and taken.source == here then
+        -- the translator's working copy beats the version they released
+        if finished then
+          mod.log:info("language pack: packs/%s overrides the one in mod %s", r.id, r.from)
+        end
+      elseif taken then
+        mod.log:warn("language pack: mod %s and mod %s both register '%s'; keeping %s",
+          taken.from, r.from, r.id, taken.from)
+      else
+        local p = Pack.describe(r.source.fs, libs.json, r.dir, r.id)
+        p.dir, p.source, p.from = r.dir, r.source, r.from
+        byId[p.id] = p
+        all[#all + 1] = p
+      end
+    end
+    table.sort(all, function(a, b) return a.id < b.id end)
+    -- refilled in place: the OPTIONS row's closures hold this table
+    for i = #choices, 1, -1 do choices[i] = nil end
+    choices[1] = { "ENGLISH", "off" }
+    default = "off"
+    for _, p in ipairs(all) do
+      choices[#choices + 1] = { p.label, p.id }
+      -- default to the first real pack, so a single-language install just
+      -- works; packs marked "example": true never auto-select
+      if default == "off" and not p.example and p.id:sub(1, 1) ~= "_" then default = p.id end
+    end
+    -- defined for the Mod Manager page too
+    mod.options:define({
+      { key = "language", type = "choice", label = "LANGUAGE",
+        default = default, choices = choices },
+    })
   end
-  -- default to the first real pack, so installing a single-language build
-  -- of this mod just works; packs marked "example": true never auto-select
-  for _, p in ipairs(packs) do
-    local meta = Pack.meta(fs, libs.json, PACKS .. "/" .. p.id)
-    if meta.example ~= true and p.id:sub(1, 1) ~= "_" then default = p.id break end
+  rebuild()
+
+  -- registerPack{ api = 1, id =, dir =, read =, list =, info =, assetPath =, mod = }
+  -- read/list/info/assetPath are the pack mod's own mod:read, mod:list,
+  -- mod:info and mod.assets:path: a mod can only read its own folder.
+  mod.exports.packApi = 1
+  mod.exports.registerPack = function(spec)
+    local from = type(spec) == "table" and tostring(spec.mod or "?") or "?"
+    local function refuse(why)
+      mod.log:warn("language pack from mod %s not registered: %s", from, why)
+      return false, why
+    end
+    if type(spec) ~= "table" or spec.api ~= 1 then
+      return refuse("needs pack api 1; update Easy Language Packs or re-release the pack")
+    end
+    local id = spec.id
+    if type(id) ~= "string" or not id:match("^[%w_%-]+$") or id == "off" then
+      return refuse("bad pack id " .. tostring(id))
+    end
+    for _, f in ipairs({ "read", "list", "info" }) do
+      if type(spec[f]) ~= "function" then return refuse("missing " .. f) end
+    end
+    local function guarded(fn, want)
+      return function(path)
+        local ok, v = pcall(fn, path)
+        if ok and type(v) == want then return v end
+        return nil
+      end
+    end
+    local list = guarded(spec.list, "table")
+    local source = {
+      fs = { read = guarded(spec.read, "string"), info = guarded(spec.info, "table"),
+             list = function(path) return list(path) or {} end },
+      assetPath = type(spec.assetPath) == "function" and guarded(spec.assetPath, "string") or nil,
+    }
+    local dir = type(spec.dir) == "string" and spec.dir ~= "" and spec.dir or "pack"
+    registered[#registered + 1] = { id = id, dir = dir, source = source, from = from }
+    if finished then rebuild() end
+    return true
   end
-  -- still defined so the Mod Manager page shows the same setting
-  mod.options:define({
-    { key = "language", type = "choice", label = "LANGUAGE",
-      default = default, choices = choices },
-  })
+
+  mod.events:on("mods.loaded", function()
+    finished = true
+    rebuild()
+  end)
 
   local function isChoice(id)
     for _, c in ipairs(choices) do if c[2] == id then return true end end
     return false
   end
 
-  -- ---- reading packs (cached: re-selecting a language is instant) ---------
-  local cache = {}
+  local function locate(id)
+    local p = byId[id]
+    if p then return p.source.fs, p.dir end
+  end
+
   local function readPack(id)
     local hit = cache[id]
     if hit then return hit end
-    local entries, meta, problems = Pack.read(fs, libs, PACKS, id)
+    local entries, meta, problems = Pack.read(locate, libs, id)
     for _, p in ipairs(problems) do mod.log:warn("language pack: %s", p) end
     hit = { entries = entries, meta = meta or {} }
     cache[id] = hit
@@ -93,9 +180,15 @@ return function(mod)
 
   -- Fonts: "font": "pixel" uses the engine's bundled Plain Pixel TTF; an
   -- object registers the pack's own TTF; glyph_pages/charmap add 8x8 sheets.
-  local function applyFont(meta, dir)
+  -- File paths resolve in the folder or mod the pack came from.
+  local function applyFont(meta, p)
     local font = game.data.font
     if type(font) ~= "table" then return false end
+    local function asset(file)
+      local path = p.source.assetPath and p.source.assetPath(p.dir .. "/" .. file)
+      if not path then mod.log:warn("language pack '%s': cannot locate %s", p.id, file) end
+      return path
+    end
     local touched = false
     local spec = meta.font
     if spec == "pixel" or spec == true then
@@ -104,16 +197,16 @@ return function(mod)
     elseif type(spec) == "table" then
       local ttf = {}
       for k, v in pairs(spec) do ttf[k] = v end
-      if type(ttf.file) == "string" then ttf.file = mod.assets:path(dir .. "/" .. ttf.file) end
+      if type(ttf.file) == "string" then ttf.file = asset(ttf.file) end
       live:set(font, "ttf", ttf)
       touched = true
     end
     if type(meta.glyph_pages) == "table" then
       for pageId, page in pairs(meta.glyph_pages) do
-        local p = {}
-        for k, v in pairs(page) do p[k] = v end
-        if type(p.image) == "string" then p.image = mod.assets:path(dir .. "/" .. p.image) end
-        live:set(font, pageId, p)
+        local copy = {}
+        for k, v in pairs(page) do copy[k] = v end
+        if type(copy.image) == "string" then copy.image = asset(copy.image) end
+        live:set(font, pageId, copy)
       end
       touched = true
     end
@@ -141,7 +234,7 @@ return function(mod)
       for _, f in ipairs(failed) do
         mod.log:warn("language pack: %s: skipped (%s)", f.where, f.reason)
       end
-      touchedNow = applyFont(pack.meta, PACKS .. "/" .. id)
+      touchedNow = applyFont(pack.meta, byId[id])
       if type(pack.meta.naming) == "table" and type(pack.meta.naming.upper) == "table" then
         naming = pack.meta.naming
       end
@@ -223,31 +316,30 @@ return function(mod)
     return text
   end
 
-  if #choices > 1 then
-    mod.hooks:wrap("ui.options.rows", function(next, g, rows)
-      local out = next(g, rows)
-      if type(out) ~= "table" then return out end
-      local row = {
-        id = "easy_language_packs",
-        label = tr("LANGUAGE"),
-        value = function() return labelOf(current or chosen()) end,
-        -- LEFT/RIGHT (or A) steps through ENGLISH and the installed packs
-        step = function(g2, dir)
-          local now = current or chosen()
-          local i = 1
-          for k, c in ipairs(choices) do if c[2] == now then i = k end end
-          i = (i - 1 + (dir or 1)) % #choices + 1
-          local id = choices[i][2]
-          store(g2, id)
-          switchTo(id)
-          return true
-        end,
-      }
-      -- Gold's OPTION screen has no MODS row; CANCEL is its last one
-      local anchor = GEN == "gen2" and "CANCEL" or tr("MODS")
-      return mod.ui.insertBefore(out, anchor, row)
-    end)
-  end
+  mod.hooks:wrap("ui.options.rows", function(next, g, rows)
+    local out = next(g, rows)
+    -- pack mods register after this chunk runs, so decide on every call
+    if type(out) ~= "table" or #choices < 2 then return out end
+    local row = {
+      id = "easy_language_packs",
+      label = tr("LANGUAGE"),
+      value = function() return labelOf(current or chosen()) end,
+      -- LEFT/RIGHT (or A) steps through ENGLISH and the installed packs
+      step = function(g2, dir)
+        local now = current or chosen()
+        local i = 1
+        for k, c in ipairs(choices) do if c[2] == now then i = k end end
+        i = (i - 1 + (dir or 1)) % #choices + 1
+        local id = choices[i][2]
+        store(g2, id)
+        switchTo(id)
+        return true
+      end,
+    }
+    -- Gold's OPTION screen has no MODS row; CANCEL is its last one
+    local anchor = GEN == "gen2" and "CANCEL" or tr("MODS")
+    return mod.ui.insertBefore(out, anchor, row)
+  end)
 
   -- ---- name entry -------------------------------------------------------------
   mod.hooks:wrap("ui.naming.grid", function(next, base, ctx)

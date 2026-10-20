@@ -266,20 +266,33 @@ function Pack.meta(fs, Json, dir)
   return meta, {}
 end
 
--- Pack.read(fs, libs, packsDir, id) -> entries, meta, problems
+-- Pack.describe(fs, Json, dir, id) -> { id=, label=, name=, example= }
+-- What the LANGUAGE option shows for a pack: its label, else its name, else id.
+function Pack.describe(fs, Json, dir, id)
+  local meta = Pack.meta(fs, Json, dir)
+  local label = type(meta.label) == "string" and meta.label
+    or (type(meta.name) == "string" and meta.name) or id
+  return { id = id, label = label, name = meta.name or id,
+           example = meta.example == true, hidden = meta.hidden == true }
+end
+
+-- Pack.read(locate, libs, id) -> entries, meta, problems
+-- locate(id) -> fs, dir of the pack with that id, or nil: a pack can live in
+-- this mod's packs/ folder or in a pack mod, each read through its own fs.
 -- Follows "extends" (a pack id or list of ids) so a regional variant only
 -- needs the lines that differ; the base is read first, so the variant wins.
-function Pack.read(fs, libs, packsDir, id, seen)
+-- The base may live in the other place.
+function Pack.read(locate, libs, id, seen)
   seen = seen or {}
   local entries, problems = {}, {}
   if seen[id] then
     return entries, {}, { ("pack '%s': extends itself in a loop"):format(id) }
   end
   seen[id] = true
-  local dir = packsDir .. "/" .. id
-  local info = fs.info(dir)
+  local fs, dir = locate(id)
+  local info = fs and fs.info(dir)
   if not (info and info.type == "directory") then
-    return entries, {}, { ("pack '%s' not found in %s/"):format(id, packsDir) }
+    return entries, {}, { ("pack '%s' not found"):format(id) }
   end
   local meta, metaProblems = Pack.meta(fs, libs.json, dir)
   for _, p in ipairs(metaProblems) do problems[#problems + 1] = p end
@@ -289,7 +302,7 @@ function Pack.read(fs, libs, packsDir, id, seen)
   for _, base in ipairs(type(bases) == "table" and bases or {}) do
     -- a blank "extends" (as the template ships) means no base pack
     if type(base) == "string" and not base:match("^%s*$") then
-      local e, _, p = Pack.read(fs, libs, packsDir, base, seen)
+      local e, _, p = Pack.read(locate, libs, base, seen)
       for _, x in ipairs(e) do entries[#entries + 1] = x end
       for _, x in ipairs(p) do problems[#problems + 1] = x end
     end
@@ -317,17 +330,13 @@ function Pack.read(fs, libs, packsDir, id, seen)
   return entries, meta, problems
 end
 
--- Pack.list(fs, libs, packsDir) -> { { id=, label=, name= }, ... } sorted by id
+-- Pack.list(fs, libs, packsDir) -> { Pack.describe(...), ... } sorted by id
 function Pack.list(fs, libs, packsDir)
   local out = {}
   for _, name in ipairs(fs.list(packsDir) or {}) do
     local info = fs.info(packsDir .. "/" .. name)
     if info and info.type == "directory" and name:sub(1, 1) ~= "." then
-      local meta = Pack.meta(fs, libs.json, packsDir .. "/" .. name)
-      local label = type(meta.label) == "string" and meta.label
-        or (type(meta.name) == "string" and meta.name) or name
-      out[#out + 1] = { id = name, label = label, name = meta.name or name,
-                        hidden = meta.hidden == true }
+      out[#out + 1] = Pack.describe(fs, libs.json, packsDir .. "/" .. name, name)
     end
   end
   table.sort(out, function(a, b) return a.id < b.id end)
