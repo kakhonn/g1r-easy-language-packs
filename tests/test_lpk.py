@@ -244,6 +244,24 @@ class Split(SplitCase):
     """What split extracts, on the flat layout (one sheet per game family)."""
     layout = "flat"
 
+    def test_finds_imports_in_the_user_data_folder(self):
+        # a normal (not portable) install: the game folder has only the
+        # engine, the imported games sit in the release build's save folder
+        data = os.path.join(self.tmp, "xdg", "pokemon-love2d")
+        os.makedirs(os.path.dirname(data))
+        shutil.move(self.game, data)
+        os.makedirs(self.game)
+        shutil.move(os.path.join(data, "src"), os.path.join(self.game, "src"))
+        env = {"XDG_DATA_HOME": os.path.join(self.tmp, "xdg")}
+        with mock.patch.object(lpk.sys, "platform", "linux"), mock.patch.dict(os.environ, env), \
+                mock.patch.dict(os.environ, {}) as e:
+            e.pop("POKEPORT_IDENTITY", None)
+            self.assertEqual(lpk.imports_root(None, self.game), data)
+            self.assertEqual(self.split(), 0)
+        self.assertTrue(any(r["kind"] == "dialogue" for r in self.sheet("01_red_blue")),
+                        "the imported games were read without --cache")
+        self.assertEqual(lpk.imports_root("X", self.game), "X", "--cache still wins")
+
     def test_writes_every_sheet_and_pack_json(self):
         self.assertEqual(self.split("--name", "Español", "--author", "Tester"), 0)
         for name, _ in lpk.SPLIT_FILES:

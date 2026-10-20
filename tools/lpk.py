@@ -340,15 +340,33 @@ def cache_candidates(explicit=None, game=None):
         except OSError:
             pass
 
+    # A release build is a fused executable, which LOVE gives a save folder
+    # named after the identity alone (%APPDATA%\pokemon-love2d); a source run
+    # through love.exe nests it under LOVE\ instead.
     if sys.platform == "win32" and os.environ.get("APPDATA"):
-        add_all(os.path.join(os.environ["APPDATA"], "LOVE"))
         roots.append(os.path.join(os.environ["APPDATA"], ident))
+        add_all(os.path.join(os.environ["APPDATA"], "LOVE"))
     elif sys.platform == "darwin":
-        add_all(os.path.expanduser("~/Library/Application Support/LOVE"))
+        base = os.path.expanduser("~/Library/Application Support")
+        roots.append(os.path.join(base, ident))
+        add_all(os.path.join(base, "LOVE"))
     else:
         base = os.environ.get("XDG_DATA_HOME") or os.path.expanduser("~/.local/share")
+        roots.append(os.path.join(base, ident))
         add_all(os.path.join(base, "love"))
     return roots
+
+
+def imports_root(explicit=None, game=None):
+    """The folder holding the imported games (red/, gold/, firered/, ...):
+    --cache, else the game folder if a portable install keeps them there,
+    else the first user data folder that has any."""
+    if explicit:
+        return explicit
+    for root in cache_candidates(None, game):
+        if any(os.path.isdir(os.path.join(root, v, "data", "generated")) for v in GEN_OF):
+            return root
+    return game
 
 
 def find_cache(root, version):
@@ -1639,7 +1657,9 @@ def pack_json_template(name, label, author):
 
 def cmd_split(args):
     game = args.game
-    root = args.cache or game
+    root = imports_root(args.cache, game)
+    if root != game:
+        print(f"lpk: reading imported games from {root}", file=sys.stderr)
     datas = {}
     for v in GEN_OF:
         d = load_version(root, v)
@@ -1651,7 +1671,9 @@ def cmd_split(args):
             print(f"lpk: {v}: {len(d['lines'])} lines, {len(d['names'])} names, "
                   f"{len(d['dex'])} dex fields", file=sys.stderr)
     if not datas:
-        print("lpk: no imported games found; pass --game (portable install) or --cache", file=sys.stderr)
+        print("lpk: no imported games found in the game folder or your user data folder "
+              "(%APPDATA%\\pokemon-love2d); import them in the game first, or pass --cache",
+              file=sys.stderr)
         return 1
 
     def pick(*vs):
@@ -2009,7 +2031,8 @@ def main(argv=None):
         sp.add_argument("--game", help="game folder (engine text comes from its src/ when "
                         "present, otherwise from a downloaded copy)")
         sp.add_argument("--cache", help="folder holding the imported ROM data (default: the "
-                        "--game folder for portable installs, then %%APPDATA%%\\LOVE\\*)")
+                        "--game folder for portable installs, then %%APPDATA%%\\pokemon-love2d, "
+                        "then %%APPDATA%%\\LOVE\\*)")
         sp.add_argument("--version", choices=["red", "blue", "yellow"],
                         help="which imported game to read (default: first found)")
         engine_args(sp)
@@ -2027,7 +2050,8 @@ def main(argv=None):
     sp.add_argument("--game", required=True, help="game folder (for portable installs it holds "
                     "the red/, gold/, firered/... data folders)")
     engine_args(sp)
-    sp.add_argument("--cache", help="folder holding red/, gold/, ... if not the game folder")
+    sp.add_argument("--cache", help="folder holding red/, gold/, ... (default: the game folder "
+                    "on a portable install, else your user data folder, %%APPDATA%%\\pokemon-love2d)")
     sp.add_argument("-o", "--output", required=True, help="output folder for the CSVs")
     sp.add_argument("--semicolon", action="store_true", help="use ; as the CSV delimiter")
     sp.add_argument("--name", help="language name for pack.json (default: the output folder's name)")

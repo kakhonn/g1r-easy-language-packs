@@ -229,7 +229,20 @@ whole mod.
   and only reads `lang/strings.lua`, so this mod can't translate it.
 - Imported ROM data: portable installs keep it in the game folder
   (`<game>/red/data/generated/*.lua`, `gold/...`, `firered/data/generated/gba/...`);
-  otherwise `%APPDATA%\LOVE\<identity>\`. Gen 1/2 files are `return {…}`;
+  otherwise the save folder:
+  - **Release builds** are fused executables, so the folder is
+    `%APPDATA%\<identity>\` (`~/Library/Application Support/<identity>`,
+    `~/.local/share/<identity>`). The identity is `pokemon-love2d`
+    (`conf.lua`, or `POKEPORT_IDENTITY`).
+  - **Source runs** through `love.exe` use `%APPDATA%\LOVE\<identity>\`.
+  - **Mods follow the same split:** the launcher installs them into
+    `<save folder>/mods/` unless `portable.txt` is beside the exe
+    (`LauncherMods`, `CacheFs`). It copies strays it finds in the game folder.
+  - **What `lpk.py` searches:** `cache_candidates` tries the game folder,
+    then the release folder, then `LOVE\*`. `split` uses `imports_root` for
+    the same search, so `--cache` is only a fallback.
+
+  Gen 1/2 files are `return {…}`;
   Gen 3 `scripts/text.lua` is a chunked `T["label"] = {IR…}` form
   (`LuaReader.load_assignments`), decoded by `ir_source` (`\n` line, `\v`
   scroll, `\f` page, `{PLAYER}`, `{STR_VAR_n}`, `{B_…}` per dialect
@@ -266,7 +279,7 @@ checkout: release builds have no `tests/`, and the harness needs the engine's
 `tests/love_stub.lua`.
 
 The mod tracks the latest G1R release, so test against a current engine and
-fix the mod when the engine moves. Last full run: 177 Lua checks + 39 Python
+fix the mod when the engine moves. Last full run: 177 Lua checks + 40 Python
 tests, all passing, against engine `dev` 48a7139 (2026-10-20).
 
 ## Releasing
