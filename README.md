@@ -23,10 +23,15 @@ This is a vibe-coded project, written with Claude (Anthropic's AI). See
 ## Quick start: make a language pack
 
 1. [Install the mod](#install), and import the games you want to translate.
-2. Open a command prompt in the mod's `tools` folder,
-   `<game folder>\mods\easy_language_packs\tools`. (In File Explorer, open
-   the folder, type `cmd` in the address bar and press Enter.)
-3. Run this, with your game folder, language and name filled in:
+2. Open a command prompt in the mod's `tools` folder. In File Explorer, paste
+   the path into the address bar, then type `cmd` there and press Enter:
+   - **Normal install:** `%APPDATA%\pokemon-love2d\mods\easy_language_packs\tools`
+   - **Portable install** (a `portable.txt` beside `gen1recomp.exe`):
+     `<game folder>\mods\easy_language_packs\tools`
+
+   Not sure which you have? See [Where your game keeps things](#where-your-game-keeps-things).
+3. Run this, with your game folder, language and name filled in. It finds
+   your imported games on its own, on a normal install or a portable one:
 
    ```
    py lpk.py split --game "C:\path\to\gen1recomp" -o ..\packs\es --name "Español" --author "You"
@@ -43,9 +48,7 @@ This is a vibe-coded project, written with Claude (Anthropic's AI). See
 
 Updating the mod replaces its folder, `packs\` included, so keep a copy of
 your working pack somewhere else. A released pack (below) is a mod of its
-own, and updates leave it alone. If your game isn't a portable install, your imported
-games are in `%APPDATA%\LOVE\pokemon-love2d`: add
-`--cache "%APPDATA%\LOVE\pokemon-love2d"` to the command.
+own, and updates leave it alone.
 
 ## Share your pack
 
@@ -80,10 +83,33 @@ players import the new zip over the old one.
    [Releases](https://github.com/kakhonn/g1r-easy-language-packs/releases).
 2. In the game: **MODS > Import mod .zip** and pick it.
 3. Add a language: import its `elp_<id>-X.Y.Z.zip` the same way. A pack
-   folder works too: put it in `mods/easy_language_packs/packs/` (e.g.
-   `packs/es/`). On a portable install, `mods` is inside the game folder.
+   folder works too: put it in `mods\easy_language_packs\packs\` (e.g.
+   `packs\es\`) inside your [mods folder](#where-your-game-keeps-things).
 4. **OPTIONS > LANGUAGE**: press LEFT/RIGHT (or A) to cycle through ENGLISH and
    your packs. The same setting is also on the mod's page in the Mod Manager.
+
+### Where your game keeps things
+
+G1R keeps your mods and imported games in one of two places:
+
+- **Normal install:** your user data folder. That's
+  `%APPDATA%\pokemon-love2d\` on Windows (paste it into File Explorer's
+  address bar), `~/Library/Application Support/pokemon-love2d/` on macOS, and
+  `~/.local/share/pokemon-love2d/` on Linux.
+- **Portable install:** the game folder itself. A game is portable when there
+  is a file named `portable.txt` next to `gen1recomp.exe`.
+
+In that folder:
+
+- `mods\` holds the installed mods, so this one is in
+  `mods\easy_language_packs\`, with `lpk.py` in its `tools\`.
+- `red\`, `gold\`, `firered\` and so on hold your imported games. `lpk.py`
+  looks for them in both places on its own; if it can't find them, pass the
+  folder as `--cache`.
+
+On a normal install, a mod unzipped into the game folder is copied to the
+right place when the game starts. If you run G1R from source with `love.exe`,
+the folder is `%APPDATA%\LOVE\pokemon-love2d\` instead.
 
 Re-importing or updating the mod replaces its folder, `packs/` included, so
 keep pack folders backed up somewhere else. Imported language packs are
@@ -257,9 +283,11 @@ py tools\lpk.py template --game "C:\path\to\gen1recomp" -o es.csv
   latest release unless you pass `--engine-version 0.3.89` (match the version
   you play). `--engine-source DIR` uses a source folder you already have;
   `--no-download` skips that text instead.
-- Dialogue and names come from your **imported ROM cache**, auto-detected at
-  `%APPDATA%\LOVE\pokemon-love2d\red\data\generated` (run the game once with
-  your ROM first). Use `--version blue|yellow` or `--cache DIR` to choose.
+- Dialogue and names come from your **imported games** (run the game once with
+  your ROM first). They're found in the game folder on a portable install,
+  else in `%APPDATA%\pokemon-love2d` (see
+  [Where your game keeps things](#where-your-game-keeps-things)). Use
+  `--version blue|yellow` or `--cache DIR` to choose.
 - `-o file.json` makes a JSON template instead. `--semicolon` writes `;` CSV for
   European-locale Excel.
 - `--merge packs\es` carries existing translations into a fresh template after
@@ -332,8 +360,9 @@ with `_`.
 
 Dialogue is matched by its English, so a Gold/Silver translation also applies
 in Crystal wherever the line is identical, even though Crystal stores it at a
-different address. The exclusive sheets hold only what that adds. Portable
-installs need only `--game`; otherwise add `--cache "%APPDATA%\LOVE\pokemon-love2d"`.
+different address. The exclusive sheets hold only what that adds. `split`
+reads the imported games from the game folder on a portable install, else
+from `%APPDATA%\pokemon-love2d`; `--cache DIR` points it somewhere else.
 
 **Check a pack** (syntax, unknown ids, `%s` mismatches, missing `{CONTROL}`
 codes, overlong lines, the same key translated two ways, coverage):
@@ -394,11 +423,12 @@ deploy.py         copy the mod into a game install for testing
 **Try your changes in the game** without packaging:
 
 ```
-py deploy.py "C:\path\to\gen1recomp-win64"
+py deploy.py "%APPDATA%\pokemon-love2d"
 ```
 
-It copies the mod into `mods\easy_language_packs\`, leaving any packs you
-have there untouched.
+It copies the mod into `mods\easy_language_packs\` under that folder,
+leaving any packs you have there untouched. On a portable install, give it
+the game folder instead (`py deploy.py "C:\path\to\gen1recomp-win64"`).
 
 **Run the tests** (needs Python 3 and LuaJIT, plus a checkout of the engine;
 no ROMs required):

@@ -1,13 +1,16 @@
 #!/usr/bin/env python3
 """Copy this mod into a game install for testing, without packaging.
 
-    py deploy.py "C:\\path\\to\\gen1recomp-win64"
+    py deploy.py "%APPDATA%\\pokemon-love2d"          (a normal install)
+    py deploy.py "C:\\path\\to\\gen1recomp-win64"     (a portable install)
 
-Writes into <game>/mods/easy_language_packs/.  Files from the repository
+Writes into <folder>/mods/easy_language_packs/.  Files from the repository
 replace their installed copies; anything else already there (your packs,
-packs/_example edits aside) is left alone.  Point it at the game folder of a
-portable install, or at the save folder (%APPDATA%\\LOVE\\pokemon-love2d)
-for a normal one.
+packs/_example edits aside) is left alone.  Give it the folder the game
+keeps its mods in: the user data folder for a normal install
+(%APPDATA%\\pokemon-love2d on Windows, or %APPDATA%\\LOVE\\pokemon-love2d
+when running G1R from source), or the game folder of a portable install
+(portable.txt beside gen1recomp.exe).
 """
 import os
 import shutil
