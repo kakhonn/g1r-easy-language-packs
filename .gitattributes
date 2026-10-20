@@ -4,5 +4,6 @@
 .github/        export-ignore
 tests/          export-ignore
 deploy.py       export-ignore
+CLAUDE.md       export-ignore
 .gitattributes  export-ignore
 .gitignore      export-ignore

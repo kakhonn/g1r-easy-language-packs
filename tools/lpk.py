@@ -26,6 +26,7 @@ Examples (Windows):
 """
 
 import argparse
+import collections
 import csv
 import io
 import json
@@ -33,6 +34,9 @@ import os
 import re
 import shutil
 import sys
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import lpk_layout  # noqa: E402  (where split puts each row; lives next to this file)
 
 # --------------------------------------------------------------- kinds
 # Must match lib/pack.lua.
@@ -369,17 +373,153 @@ def load_cache(gen_dir):
     return data
 
 
-def reference_rows(game=None, cache=None, version=None, quiet=False, all_games=False):
-    """Every translatable (kind, key, english, note) the sources give us."""
+# ---- the engine's source (for its menu and battle text) -----------------
+# Release builds don't ship src/, so when the game folder has none, lpk.py
+# downloads that release's "Source code (zip)" from GitHub once, keeps only
+# src/**/*.lua, and caches it per version.
+
+ENGINE_REPO = "bryanthaboi/gen1recomp"
+# overridable for tests (a local server standing in for GitHub)
+GITHUB_API = os.environ.get("LPK_GITHUB_API", "https://api.github.com")
+GITHUB_WEB = os.environ.get("LPK_GITHUB_WEB", "https://github.com")
+
+
+def engine_cache_root():
+    if os.environ.get("LPK_CACHE"):
+        return os.environ["LPK_CACHE"]
+    if sys.platform == "win32" and os.environ.get("LOCALAPPDATA"):
+        base = os.environ["LOCALAPPDATA"]
+    elif sys.platform == "darwin":
+        base = os.path.expanduser("~/Library/Caches")
+    else:
+        base = os.environ.get("XDG_CACHE_HOME") or os.path.expanduser("~/.cache")
+    return os.path.join(base, "easy_language_packs", "engine")
+
+
+def _http(url):
+    import urllib.request
+    req = urllib.request.Request(url, headers={"User-Agent": "easy-language-packs-lpk",
+                                               "Accept": "application/vnd.github+json"})
+    return urllib.request.urlopen(req, timeout=60)
+
+
+def latest_engine_tag():
+    with _http(f"{GITHUB_API}/repos/{ENGINE_REPO}/releases/latest") as resp:
+        return json.load(resp)["tag_name"]
+
+
+def fetch_engine_source(tag, refresh=False):
+    """Folder holding src/ for engine release `tag` (e.g. v0.3.89),
+    downloading it on first use.  Returns None on failure."""
+    import tempfile
+    import zipfile
+    dest = os.path.join(engine_cache_root(), tag)
+    marker = os.path.join(dest, "src", "core", "Strings.lua")
+    if os.path.isfile(marker) and not refresh:
+        print(f"lpk: engine source {tag}: using the copy in {dest}", file=sys.stderr)
+        return dest
+    url = f"{GITHUB_WEB}/{ENGINE_REPO}/archive/refs/tags/{tag}.zip"
+    print(f"lpk: no src/ in the game folder; downloading G1R's source for {tag} "
+          f"(one time, cached in {dest})", file=sys.stderr)
+    tmp = tempfile.NamedTemporaryFile(suffix=".zip", delete=False)
+    try:
+        with _http(url) as resp, tmp:
+            total = int(resp.headers.get("Content-Length") or 0)
+            got, shown = 0, -1
+            while True:
+                chunk = resp.read(1 << 16)
+                if not chunk:
+                    break
+                tmp.write(chunk)
+                got += len(chunk)
+                step = got * 10 // total if total else got >> 23
+                if step != shown:
+                    shown = step
+                    size = f"{got / 1e6:.0f} of {total / 1e6:.0f} MB" if total else f"{got / 1e6:.0f} MB"
+                    print(f"lpk:   {size}", file=sys.stderr)
+        staging = dest + ".partial"
+        if os.path.isdir(staging):
+            shutil.rmtree(staging)
+        kept = 0
+        with zipfile.ZipFile(tmp.name) as zf:
+            for info in zf.infolist():
+                # archive paths look like gen1recomp-0.3.89/src/core/Strings.lua
+                parts = info.filename.split("/", 1)
+                if len(parts) != 2 or not parts[1].startswith("src/") or not parts[1].endswith(".lua"):
+                    continue
+                rel = os.path.normpath(parts[1])
+                if rel.startswith("..") or os.path.isabs(rel):
+                    continue  # never write outside the cache
+                out = os.path.join(staging, rel)
+                os.makedirs(os.path.dirname(out), exist_ok=True)
+                with zf.open(info) as src, open(out, "wb") as fh:
+                    shutil.copyfileobj(src, fh)
+                kept += 1
+        if not os.path.isfile(os.path.join(staging, "src", "core", "Strings.lua")):
+            print(f"lpk: the download for {tag} doesn't look like G1R's source; engine text skipped",
+                  file=sys.stderr)
+            shutil.rmtree(staging, ignore_errors=True)
+            return None
+        if os.path.isdir(dest):
+            shutil.rmtree(dest)
+        os.makedirs(os.path.dirname(dest), exist_ok=True)
+        os.replace(staging, dest)
+        print(f"lpk: engine source {tag}: {kept} files", file=sys.stderr)
+        return dest
+    except Exception as err:  # network, disk, bad zip: report and carry on without
+        print(f"lpk: couldn't download G1R's source for {tag} ({err}); engine menu/battle "
+              "text skipped. Try again, or pass --engine-source <folder with src>.", file=sys.stderr)
+        return None
+    finally:
+        try:
+            os.unlink(tmp.name)
+        except OSError:
+            pass
+
+
+def engine_source(args):
+    """Folder whose src/ holds the engine's Lua: --engine-source, else the
+    game folder's own src/, else a downloaded (and cached) release."""
+    given = getattr(args, "engine_source", None)
+    if given:
+        if not os.path.isfile(os.path.join(given, "src", "core", "Strings.lua")):
+            print(f"lpk: {given} has no src/core/Strings.lua; engine text skipped", file=sys.stderr)
+            return None
+        return given
+    game = getattr(args, "game", None)
+    if game and os.path.isdir(os.path.join(game, "src")):
+        return game
+    if getattr(args, "no_download", False):
+        print("lpk: no src/ in the game folder and --no-download given; engine text skipped",
+              file=sys.stderr)
+        return None
+    tag = getattr(args, "engine_version", None)
+    if tag:
+        tag = tag if tag.startswith("v") else "v" + tag
+    else:
+        try:
+            tag = latest_engine_tag()
+        except Exception as err:
+            print(f"lpk: couldn't look up G1R's latest release ({err}); pass --engine-version "
+                  "X.Y.Z, or --engine-source <folder with src>", file=sys.stderr)
+            return None
+        print(f"lpk: matching engine text to G1R {tag}, the latest release. If you play a "
+              "different version, pass --engine-version X.Y.Z", file=sys.stderr)
+    return fetch_engine_source(tag, getattr(args, "refresh_engine", False))
+
+
+def reference_rows(game=None, cache=None, version=None, quiet=False, all_games=False, source=None):
+    """Every translatable (kind, key, english, note) the sources give us.
+    `source` is the folder holding the engine's src/ (see engine_source)."""
     rows = []
-    if game:
-        strings = engine_strings(game, all_games)
+    if source:
+        strings = engine_strings(source, all_games)
         if strings is None:
-            print(f"lpk: no src/ folder in {game}; engine strings skipped", file=sys.stderr)
+            print(f"lpk: no src/ folder in {source}; engine strings skipped", file=sys.stderr)
         else:
             for text, where in strings:
                 rows.append(("strings", text, text, where))
-            for sid, label in status_labels(game):
+            for sid, label in status_labels(source):
                 rows.append(("statuses", sid, label, ""))
     gen_dir = None
     searched = cache_candidates(cache, game)
@@ -661,6 +801,7 @@ def cmd_check(args):
     ref = {}
     if args.game or args.cache:
         for kind, key, english, _ in reference_rows(args.game, args.cache, args.version, quiet=True,
+                                                     source=engine_source(args),
                                                      all_games=True):
             ref[(kind, key)] = english
     have_ref = bool(ref)
@@ -739,7 +880,7 @@ def cmd_check(args):
 # --------------------------------------------------------------- template
 
 def cmd_template(args):
-    rows = reference_rows(args.game, args.cache, args.version,
+    rows = reference_rows(args.game, args.cache, args.version, source=engine_source(args),
                           all_games=args.all_games)
     if not rows:
         print("lpk: nothing found; pass --game (the game folder with src/) and/or --cache",
@@ -1096,43 +1237,350 @@ SPLIT_FILES = [
 SPLIT_HEADER = ["kind", "key", "game", "english", "text", "versions", "notes"]
 
 
-def carry_over(path, rows):
-    """Copy translations from an existing sheet at `path` into `rows`, so
-    re-running split after a game update never throws work away.  Matches on
+# --------------------------------------------------------------- split: writing
+# split rewrites the files it owns and leaves the rest of the pack alone.  It
+# remembers what it wrote in a manifest so a re-run can tell a translator's
+# changes from its own: a row found somewhere else was moved there (and stays),
+# a row found nowhere was deleted (and stays deleted until --restore).  The
+# manifest sits in a "_" folder, which the mod and lpk.py never load.
+
+MANIFEST_PATH = "_lpk/split.json"
+RETIRED_DIR = "_orphaned/_retired"
+
+
+def _key_id(kind, key, game):
+    """A row's identity in the manifest: kind, key (as written in the CSV), game."""
+    return "\t".join((kind, key, game))
+
+
+def _rel(path, root):
+    return os.path.relpath(path, root).replace(os.sep, "/")
+
+
+def _cell(rec, i):
+    return rec[i] if i is not None and i < len(rec) else ""
+
+
+class _Table:
+    """One CSV/TSV file of the pack, kept as raw records so it can be
+    rewritten without disturbing what split doesn't own."""
+
+    def __init__(self, path):
+        with open(path, encoding="utf-8-sig", newline="") as fh:
+            body = fh.read()
+        self.delim = "\t" if path.lower().endswith(".tsv") else _sniff(body.split("\n", 1)[0])
+        recs = list(csv.reader(io.StringIO(body), delimiter=self.delim))
+        self.header = recs[0] if recs else []
+        self.recs = recs[1:]
+        cols = [h.strip().lower() for h in self.header]
+        col = lambda *names: next((cols.index(n) for n in names if n in cols), None)
+        self.k, self.key, self.g = col("kind"), col("key"), col("game")
+        self.text = col(*TEXT_COLUMNS)
+        self.cols = cols
+
+    def ids(self):
+        """(record index, key id) for every row naming a kind and key."""
+        if self.k is None or self.key is None:
+            return []
+        return [(i, _key_id(_cell(r, self.k), _cell(r, self.key), _cell(r, self.g)))
+                for i, r in enumerate(self.recs)]
+
+    def translated(self):
+        return [i for i, r in enumerate(self.recs) if _cell(r, self.text).strip()]
+
+
+def _scan_pack(out_dir):
+    """{relative path: _Table} for every CSV/TSV the pack loads, and
+    {key id: [relative paths holding it]}.  Like the mod, folders starting
+    with _ or . are skipped."""
+    tables, where = {}, collections.defaultdict(list)
+    for root, dirs, names in os.walk(out_dir):
+        dirs[:] = sorted(d for d in dirs if not d.startswith(("_", ".")))
+        for name in sorted(names):
+            if name.lower().endswith((".csv", ".tsv")):
+                path = os.path.join(root, name)
+                rel = _rel(path, out_dir)
+                t = tables[rel] = _Table(path)
+                for _, kid in t.ids():
+                    if rel not in where[kid]:
+                        where[kid].append(rel)
+    return tables, where
+
+
+class _Translations:
+    """Every translation already in the pack, wherever it is.  Matches on
     kind + key + game; a translation keyed by a plain id also fills that id's
-    version-pinned rows (ID#hash), and vice versa when there's exactly one.
-    Returns (number carried, [unmatched filled rows as dicts])."""
-    if not os.path.isfile(path):
-        return 0, []
-    with open(path, encoding="utf-8-sig", newline="") as fh:
-        body = fh.read()
-    reader = csv.DictReader(io.StringIO(body), delimiter=_sniff(body.split("\n", 1)[0]))
-    old = [r for r in reader if (r.get("text") or "").strip()]
-    if not old:
-        return 0, []
-    exact, by_base = {}, {}
-    for o in old:
-        k = (o.get("kind", ""), o.get("key", ""), o.get("game", ""))
-        exact[k] = o
-        base = re.sub(r"#[0-9a-fA-F]{8}$", "", k[1])
-        by_base.setdefault((k[0], base, k[2]), []).append(o)
-    used, carried = set(), 0
-    for r in rows:
-        key = csv_escape(r[1])
-        hit = exact.get((r[0], key, r[2]))
+    version-pinned rows (ID#hash), and vice versa when there's exactly one."""
+
+    def __init__(self, tables):
+        self.entries = []          # (relative path, record index, kind, key, game, text)
+        self.exact, self.by_base, self.used = {}, {}, set()
+        for rel in sorted(tables):
+            t = tables[rel]
+            if t.k is None or t.key is None or t.text is None:
+                continue
+            for i in t.translated():
+                r = t.recs[i]
+                e = (rel, i, _cell(r, t.k), _cell(r, t.key), _cell(r, t.g), _cell(r, t.text))
+                self.entries.append(e)
+                self.exact.setdefault(e[2:5], e)
+                base = re.sub(r"#[0-9a-fA-F]{8}$", "", e[3])
+                self.by_base.setdefault((e[2], base, e[4]), []).append(e)
+
+    def take(self, kind, key, game):
+        """The translation for a row (key as written in the CSV), or ""."""
+        hit = self.exact.get((kind, key, game))
         if hit is None:
             base = re.sub(r"#[0-9a-fA-F]{8}$", "", key)
-            cands = by_base.get((r[0], base, r[2]), [])
-            plain = [c for c in cands if c.get("key") == base]
+            cands = self.by_base.get((kind, base, game), [])
+            plain = [c for c in cands if c[3] == base]
             if plain:
                 hit = plain[0]
             elif len(cands) == 1 and key == base:
                 hit = cands[0]
-        if hit is not None:
-            r[4] = hit["text"]
-            used.add(id(hit))
-            carried += 1
-    return carried, [o for o in old if id(o) not in used]
+        if hit is None:
+            return ""
+        # every copy of the same key counts as carried, not orphaned
+        for e in self.by_base.get((hit[2], re.sub(r"#[0-9a-fA-F]{8}$", "", hit[3]), hit[4]), []):
+            if e[3] == hit[3] and e[5] == hit[5]:
+                self.used.add(e[:2])
+        self.used.add(hit[:2])
+        return hit[5]
+
+    def unused(self, rels):
+        """Translations in the given files that no row took."""
+        return [e for e in self.entries if e[0] in rels and e[:2] not in self.used]
+
+
+def _load_manifest(out_dir, tables):
+    """The manifest, or for a pack split wrote before manifests existed, one
+    rebuilt from the flat sheets (01_ ... 13_) in the pack root."""
+    path = os.path.join(out_dir, *MANIFEST_PATH.split("/"))
+    if os.path.isfile(path):
+        with open(path, encoding="utf-8") as fh:
+            m = json.load(fh)
+        return {"files": m.get("files", {}), "pins": m.get("pins", {}), "deleted": m.get("deleted", {}),
+                "legacy": False}
+    files = {}
+    for name, _ in SPLIT_FILES:
+        rel = name + ".csv"
+        if rel in tables:
+            files[rel] = [kid for _, kid in tables[rel].ids()]
+    return {"files": files, "pins": {}, "deleted": {}, "legacy": bool(files)}
+
+
+def _write_rows(path, rows, delim):
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    with open(path, "w", encoding="utf-8-sig", newline="") as fh:
+        w = csv.writer(fh, delimiter=delim)
+        w.writerow(SPLIT_HEADER)
+        for r in rows:
+            w.writerow([r[0], csv_escape(r[1]), r[2], csv_escape(r[3]), r[4], r[5], r[6]])
+
+
+def _save_orphans(out_dir, rel, entries, tables, delim):
+    """Append orphaned translations to _orphaned/<rel> (never overwrite)."""
+    path = os.path.join(out_dir, "_orphaned", *rel.split("/"))
+    old = _Table(path) if os.path.isfile(path) else None
+    seen = {tuple(r[:5]) for r in (old.recs if old else [])}
+    rows = list(old.recs) if old else []
+    for (_, i, kind, key, game, text) in entries:
+        t = tables[rel]
+        rec = t.recs[i]
+        col = lambda name: _cell(rec, t.cols.index(name)) if name in t.cols else ""
+        row = [kind, key, game, col("english"), text, col("versions"), col("notes")]
+        if tuple(row[:5]) not in seen:
+            seen.add(tuple(row[:5]))
+            rows.append(row)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8-sig", newline="") as fh:
+        w = csv.writer(fh, delimiter=delim)
+        w.writerow(SPLIT_HEADER)
+        w.writerows(rows)
+
+
+def _refresh_in_place(path, table, fresh):
+    """Update English/versions/notes of split's rows in a translator's own
+    file; every other cell, row and the row order stay as they are."""
+    changed = False
+    for i, kid in table.ids():
+        row = fresh.get(kid)
+        if row is None:
+            continue
+        rec = table.recs[i]
+        for name, value in (("english", csv_escape(row[3])), ("versions", row[5]), ("notes", row[6])):
+            if name in table.cols:
+                c = table.cols.index(name)
+                while len(rec) <= c:
+                    rec.append("")
+                if rec[c] != value:
+                    rec[c] = value
+                    changed = True
+    if changed:
+        with open(path, "w", encoding="utf-8-sig", newline="") as fh:
+            w = csv.writer(fh, delimiter=table.delim)
+            w.writerow(table.header)
+            w.writerows(table.recs)
+    return changed
+
+
+def write_split(out_dir, planned, delim, layout, restore=None, titles=None, today=None):
+    """Write split's files into a pack, keeping every translation.
+
+    planned: {relative path: rows} from lpk_layout.organize (rows are
+    [kind, key, game, english, text, versions, notes], unescaped).
+    Returns a report dict (counts and lists) for the caller to print."""
+    import datetime
+    tables, where = _scan_pack(out_dir)
+    man = _load_manifest(out_dir, tables)
+    trans = _Translations(tables)
+    last = collections.defaultdict(set)        # key id -> files split wrote it to
+    for rel, kids in man["files"].items():
+        for kid in kids:
+            last[kid].add(rel)
+    pins = dict(man["pins"])
+    # key id -> files it was deleted from (a key split writes twice can lose either copy)
+    deleted = {kid: set([v] if isinstance(v, str) else v) for kid, v in man["deleted"].items()}
+    owned_before = set(man["files"])
+    rep = collections.Counter()
+    lists = collections.defaultdict(list)
+
+    if restore:
+        want = restore.replace("\\", "/").strip("/")
+        for kid, rels in deleted.items():
+            back = {r for r in rels if want == "all" or r == want}
+            rep["restored"] += len(back)
+            rels -= back
+
+    own = collections.OrderedDict((rel, []) for rel in planned)    # canonical rows per file
+    moved_in = collections.defaultdict(list)                       # translator-moved rows per file
+    new_pins, new_deleted, dupes = {}, collections.defaultdict(set), set()
+    copies = collections.Counter(_key_id(r[0], csv_escape(r[1]), r[2])
+                                 for rows in planned.values() for r in rows)
+    for canon, rows in planned.items():
+        for row in rows:
+            kid = _key_id(row[0], csv_escape(row[1]), row[2])
+            found = where.get(kid, [])
+            mine = last.get(kid, set())
+            # places split didn't put this row: where a translator put it
+            theirs = [f for f in found if f not in mine]
+            pin = pins.get(kid)
+            if len(found) > copies[kid]:
+                dupes.add(kid)
+            if canon in deleted.get(kid, ()):
+                # back only if the translator added it again: in this file, or
+                # somewhere split doesn't put it (not split's other copy)
+                back = [f for f in found if f == canon or f not in mine]
+                if not back:
+                    new_deleted[kid].add(canon)
+                    rep["kept_deleted"] += 1
+                    continue
+                rep["undeleted"] += 1
+                dest = canon if canon in back else pin if pin in back else back[0]
+            elif pin and pin in found:
+                dest = pin
+            elif canon in mine:                 # split wrote it here last time
+                if canon in found:
+                    dest = canon
+                elif theirs:
+                    dest = theirs[0]            # the translator moved it
+                else:
+                    new_deleted[kid].add(canon)  # the translator deleted it
+                    rep["newly_deleted"] += 1
+                    continue
+            elif any(f in mine for f in found):
+                dest = canon                    # the layout changed: follow it
+                rep["relocated"] += 1
+            elif theirs:
+                dest = theirs[0]
+            elif mine:
+                new_deleted[kid].add(canon)
+                rep["newly_deleted"] += 1
+                continue
+            else:
+                dest = canon                    # new text
+            if dest == canon:
+                own[canon].append(row)
+            else:
+                new_pins[kid] = dest
+                moved_in[dest].append(row)
+                rep["pinned"] += 1
+
+    # fill in translations
+    for rows in list(own.values()) + list(moved_in.values()):
+        for row in rows:
+            text = trans.take(row[0], csv_escape(row[1]), row[2])
+            if text:
+                row[4] = text
+                rep["kept"] += 1
+
+    # which files split writes now: its canonical files with rows (every
+    # planned file in the flat layout), plus files it owned before that a
+    # translator moved rows into
+    write = collections.OrderedDict()
+    for rel, rows in own.items():
+        if rows or layout == "flat" or moved_in.get(rel):
+            write[rel] = rows + moved_in.get(rel, [])
+    foreign = {}
+    for rel, rows in moved_in.items():
+        if rel in write:
+            continue
+        if rel in owned_before:
+            write[rel] = rows
+        else:
+            foreign[rel] = rows
+
+    # orphans: translations in files split rewrites or retires that no row took
+    rewritten = set(write) | owned_before
+    orphans = collections.defaultdict(list)
+    for e in trans.unused({rel for rel in rewritten if rel in tables}):
+        orphans[e[0]].append(e)
+    for rel, entries in orphans.items():
+        _save_orphans(out_dir, rel, entries, tables, delim)
+        rep["orphaned"] += len(entries)
+
+    # retire files split owned that it no longer writes
+    stamp = (today or datetime.date.today()).isoformat()
+    for rel in sorted(owned_before - set(write)):
+        path = os.path.join(out_dir, *rel.split("/"))
+        if not os.path.isfile(path):
+            continue
+        if tables.get(rel) and tables[rel].translated():
+            dest = os.path.join(out_dir, *RETIRED_DIR.split("/"), stamp, *rel.split("/"))
+            os.makedirs(os.path.dirname(dest), exist_ok=True)
+            shutil.move(path, dest)
+            lists["retired_kept"].append(rel)
+        else:
+            os.remove(path)
+            lists["retired_removed"].append(rel)
+        d = os.path.dirname(path)
+        while os.path.normpath(d) != os.path.normpath(out_dir) and os.path.isdir(d) and not os.listdir(d):
+            os.rmdir(d)
+            d = os.path.dirname(d)
+
+    # write split's files, refresh rows it placed in translators' files
+    for rel, rows in write.items():
+        _write_rows(os.path.join(out_dir, *rel.split("/")), rows, delim)
+    fresh_by_file = {rel: {_key_id(r[0], csv_escape(r[1]), r[2]): r for r in rows} for rel, rows in foreign.items()}
+    for rel, fresh in fresh_by_file.items():
+        if _refresh_in_place(os.path.join(out_dir, *rel.split("/")), tables[rel], fresh):
+            lists["refreshed"].append(rel)
+
+    manifest = {
+        "format": 1,
+        "layout": layout,
+        "files": {rel: [_key_id(r[0], csv_escape(r[1]), r[2]) for r in rows] for rel, rows in write.items()},
+        "pins": dict(sorted(new_pins.items())),
+        "deleted": {kid: sorted(rels) for kid, rels in sorted(new_deleted.items())},
+    }
+    mpath = os.path.join(out_dir, *MANIFEST_PATH.split("/"))
+    os.makedirs(os.path.dirname(mpath), exist_ok=True)
+    with open(mpath, "w", encoding="utf-8") as fh:
+        json.dump(manifest, fh, ensure_ascii=False, indent=1)
+        fh.write("\n")
+
+    rep["duplicates"] = len(dupes)
+    return {"counts": rep, "lists": lists, "written": write, "foreign": foreign, "legacy": man["legacy"]}
 
 
 def option_label(name):
@@ -1173,8 +1621,10 @@ def pack_json_template(name, label, author):
         "extends": "",
         "_comment_extends": "Another pack's folder name to build on (e.g. \"es\" for an es_mx "
                             "pack that only changes a few lines). Leave \"\" for none.",
-        "_comment_files": "Every .csv/.tsv/.json in this folder loads in name order "
-                          "(01_ ... 13_); a later file wins when two define the same key.",
+        "_comment_files": "Every .csv/.tsv/.json in this folder and its subfolders loads, in order of "
+                          "its path (G1/... before G2/...); a later file wins when two define the same "
+                          "key. Folders starting with _ (such as _orphaned) are ignored. Move or delete "
+                          "rows freely: `lpk.py split` remembers where you put them.",
     }
 
 
@@ -1200,14 +1650,9 @@ def cmd_split(args):
 
     files = {name: [] for name, _ in SPLIT_FILES}
 
-    # engine-authored text, by source path
-    engine = engine_strings(game) if game else None
-    if engine is None:
-        print("lpk: no src/ in --game; engine menu/battle text skipped", file=sys.stderr)
-        engine = []
-    else:
-        # engine_strings drops other-game paths by default; split wants them
-        engine = engine_strings(game, all_games=True)
+    # engine-authored text, by source path (all games: split sorts them itself)
+    source = engine_source(args)
+    engine = (engine_strings(source, all_games=True) if source else None) or []
     home_file = {"rb": "01_red_blue", "yellow": "02_yellow_exclusive", "gs": "03_gold_silver",
                  "crystal": "04_crystal_exclusive", "frlg": "05_firered_leafgreen",
                  "rs": "06_ruby_sapphire", "emerald": "07_emerald_exclusive"}
@@ -1228,8 +1673,8 @@ def cmd_split(args):
         if home not in ("rb", "yellow") and text in shared_engine:
             continue
         files[home_file[home]].append(["strings", text, home_game[home], text, "", "", where])
-    if game:
-        for sid, label in status_labels(game):
+    if source:
+        for sid, label in status_labels(source):
             files["01_red_blue"].append(["statuses", sid, "gen1", label, "", "", ""])
 
     # script text and id-keyed names, per family
@@ -1298,38 +1743,52 @@ def cmd_split(args):
                       ensure_ascii=False, indent=2)
             fh.write("\n")
         print(f"  pack.json          name \"{name}\", label \"{label}\" - edit to taste")
-    carried_total, orphan_total = 0, 0
-    for name, title in SPLIT_FILES:
-        rows = files[name]
-        path = os.path.join(out_dir, name + ".csv")
-        carried, orphans = carry_over(path, rows)
-        carried_total += carried
-        if orphans:
-            orphan_total += len(orphans)
-            odir = os.path.join(out_dir, "_orphaned")
-            os.makedirs(odir, exist_ok=True)
-            with open(os.path.join(odir, name + ".csv"), "w", encoding="utf-8-sig", newline="") as fh:
-                w = csv.writer(fh, delimiter=delim)
-                w.writerow(SPLIT_HEADER)
-                for o in orphans:
-                    w.writerow([o.get(c, "") for c in SPLIT_HEADER])
-        with open(path, "w", encoding="utf-8-sig", newline="") as fh:
-            w = csv.writer(fh, delimiter=delim)
-            w.writerow(SPLIT_HEADER)
-            for r in rows:
-                w.writerow([r[0], csv_escape(r[1]), r[2], csv_escape(r[3]), r[4], r[5], r[6]])
-        per = {}
-        for r in rows:
-            per[r[0]] = per.get(r[0], 0) + 1
+    layout = args.layout
+    planned = lpk_layout.organize(collections.OrderedDict((n, files[n]) for n, _ in SPLIT_FILES), layout,
+                                  root=root)
+    title_of = {lpk_layout.sheet_path(n, layout): t for n, t in SPLIT_FILES}
+    rep = write_split(out_dir, planned, delim, layout, restore=args.restore)
+    c, lists = rep["counts"], rep["lists"]
+    width = max([len(r) for r in rep["written"]] + [20])
+    for rel, rows in rep["written"].items():
+        per = collections.Counter(r[0] for r in rows)
         detail = ", ".join(f"{k} {per[k]}" for k in KIND_ORDER if k in per)
-        kept = f"  [{carried} translations kept]" if carried else ""
-        print(f"  {name}.csv  {len(rows):6}  {title}" + (f"  ({detail})" if detail else "") + kept)
-    print(f"\nwrote {os.path.abspath(out_dir)}")
-    if carried_total:
-        print(f"kept {carried_total} existing translations")
-    if orphan_total:
-        print(f"note: {orphan_total} translations no longer match any row (the English changed "
-              f"in a game update, or the row moved); they're saved in "
+        kept = sum(1 for r in rows if r[4])
+        title = title_of.get(rel, "")
+        print(f"  {rel:<{width}}  {len(rows):6}  {title}" + (f"  ({detail})" if detail else "")
+              + (f"  [{kept} translated]" if kept else ""))
+    print(f"\nwrote {os.path.abspath(out_dir)} ({layout} layout)")
+    if rep["legacy"]:
+        print("note: upgraded a pack made by an older lpk.py; split now tracks its files in "
+              f"{MANIFEST_PATH}")
+    if c["kept"]:
+        print(f"kept {c['kept']} existing translations")
+    if c["relocated"]:
+        print(f"moved {c['relocated']} rows to their new files")
+    if c["pinned"]:
+        print(f"kept {c['pinned']} rows where you moved them")
+    if lists["refreshed"]:
+        print("refreshed the English of split's rows in your own files: " + ", ".join(lists["refreshed"]))
+    if c["newly_deleted"] or c["kept_deleted"]:
+        print(f"left out {c['newly_deleted'] + c['kept_deleted']} rows you deleted"
+              + (f" ({c['newly_deleted']} newly)" if c["newly_deleted"] else "")
+              + "; `--restore PATH` or `--restore all` brings them back")
+    if c["restored"]:
+        print(f"restored {c['restored']} deleted rows")
+    if c["undeleted"]:
+        print(f"{c['undeleted']} rows you deleted earlier are back (you added them again)")
+    if c["duplicates"]:
+        print(f"note: {c['duplicates']} rows appear in more than one file; `lpk.py check` lists them")
+    if lists["retired_kept"]:
+        print(f"note: {len(lists['retired_kept'])} files split no longer writes held translations; "
+              f"their translations moved to the new files and the old files are in "
+              f"{os.path.join(out_dir, *RETIRED_DIR.split('/'))}: " + ", ".join(lists["retired_kept"]))
+    if lists["retired_removed"]:
+        print(f"removed {len(lists['retired_removed'])} untranslated files split no longer writes: "
+              + ", ".join(lists["retired_removed"]))
+    if c["orphaned"]:
+        print(f"note: {c['orphaned']} translations no longer match any row (the English changed "
+              f"in a game update); they're saved in "
               f"{os.path.join(out_dir, '_orphaned')} (the mod ignores that folder)")
     print("note: the english column holds text from your ROMs. Use `lpk.py release` "
           "to strip it before sharing a pack.")
@@ -1350,7 +1809,8 @@ def cmd_release(args):
         shutil.rmtree(dst)
     stripped = 0
     for root, dirs, names in os.walk(src):
-        dirs[:] = [d for d in dirs if not d.startswith(".")]
+        # _orphaned/, _lpk/ and the like are working files the mod never loads
+        dirs[:] = [d for d in dirs if not d.startswith((".", "_"))]
         for name in names:
             s = os.path.join(root, name)
             d = os.path.join(dst, os.path.relpath(s, src))
@@ -1400,12 +1860,26 @@ def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     sub = p.add_subparsers(dest="cmd", required=True)
 
+    def engine_args(sp):
+        g = sp.add_argument_group("engine text (menus, battle messages)")
+        g.add_argument("--engine-version", metavar="X.Y.Z",
+                       help="G1R release to take engine text from when the game folder has no "
+                            "src/ (default: the latest release)")
+        g.add_argument("--engine-source", metavar="DIR",
+                       help="a folder containing G1R's src/ (e.g. an unzipped Source code download)")
+        g.add_argument("--no-download", action="store_true",
+                       help="never download G1R's source; skip engine text if src/ is missing")
+        g.add_argument("--refresh-engine", action="store_true",
+                       help="download G1R's source again even if a cached copy exists")
+
     def sources(sp):
-        sp.add_argument("--game", help="game folder containing src/ (for engine strings)")
+        sp.add_argument("--game", help="game folder (engine text comes from its src/ when "
+                        "present, otherwise from a downloaded copy)")
         sp.add_argument("--cache", help="folder holding the imported ROM data (default: the "
                         "--game folder for portable installs, then %%APPDATA%%\\LOVE\\*)")
         sp.add_argument("--version", choices=["red", "blue", "yellow"],
                         help="which imported game to read (default: first found)")
+        engine_args(sp)
 
     t = sub.add_parser("template", help="build a fill-in CSV/JSON of every string")
     sources(t)
@@ -1417,14 +1891,19 @@ def main(argv=None):
                         "Gold/Silver/Crystal and the GBA games")
 
     sp = sub.add_parser("split", help="one CSV per game family + per-gen names and Pokedex")
-    sp.add_argument("--game", required=True, help="game folder (with src/ and, for portable "
-                    "installs, the red/, gold/, firered/... data folders)")
+    sp.add_argument("--game", required=True, help="game folder (for portable installs it holds "
+                    "the red/, gold/, firered/... data folders)")
+    engine_args(sp)
     sp.add_argument("--cache", help="folder holding red/, gold/, ... if not the game folder")
     sp.add_argument("-o", "--output", required=True, help="output folder for the CSVs")
     sp.add_argument("--semicolon", action="store_true", help="use ; as the CSV delimiter")
     sp.add_argument("--name", help="language name for pack.json (default: the output folder's name)")
     sp.add_argument("--label", help="LANGUAGE menu label for pack.json (default: from --name, A-Z only)")
     sp.add_argument("--author", help="credit line for pack.json")
+    sp.add_argument("--layout", choices=lpk_layout.LAYOUTS, default=lpk_layout.DEFAULT_LAYOUT,
+                    help="organized: one folder per generation (default); flat: 13 sheets in the pack root")
+    sp.add_argument("--restore", metavar="PATH|all",
+                    help="bring back rows you deleted from PATH (relative to the pack), or from every file")
     sp.add_argument("--force-pack-json", action="store_true",
                     help="replace an existing pack.json with a fresh template")
 

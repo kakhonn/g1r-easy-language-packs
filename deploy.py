@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Copy this mod into a game install for testing, without packaging.
 
-    py deploy.py "K:\\path\\to\\gen1recomp-win64"
+    py deploy.py "C:\\path\\to\\gen1recomp-win64"
 
 Writes into <game>/mods/easy_language_packs/.  Files from the repository
 replace their installed copies; anything else already there (your packs,
@@ -17,7 +17,8 @@ import sys
 MOD_ID = "easy_language_packs"
 ROOT = os.path.dirname(os.path.abspath(__file__))
 # repository files that are tooling, not part of the mod
-NOT_SHIPPED = (".github/", "tests/", "deploy.py", ".gitattributes", ".gitignore")
+NOT_SHIPPED = (".github/", "tests/", "deploy.py", "CLAUDE.md", ".gitattributes", ".gitignore",
+               "workflows-to-install/")
 
 
 def mod_files():

@@ -52,7 +52,8 @@ packs/es/
   names.json
 ```
 
-All `.csv`, `.tsv` and `.json` files are read in alphabetical order (subfolders
+All `.csv`, `.tsv` and `.json` files are read in alphabetical order of their
+path inside the pack, so `dex.csv` comes before `dex/more.csv` (subfolders
 starting with `_` or `.` are skipped). When the same key appears twice, the
 later file wins. To set the order yourself, list `"files"` in `pack.json`.
 
@@ -172,7 +173,13 @@ Plain Python 3, no installs. On Windows use `py tools\lpk.py ...`.
 py tools\lpk.py template --game "C:\path\to\gen1recomp" -o es.csv
 ```
 
-- `--game` is the game folder containing `src\`. It harvests about 2,450 engine strings.
+- `--game` is your game folder. The menu and battle text comes from G1R's own
+  source code. Release builds don't include it, so the first time, `lpk.py`
+  downloads that release's source from G1R's GitHub, keeps only the Lua files,
+  and caches them in `%LOCALAPPDATA%\easy_language_packs\engine\`. It uses the
+  latest release unless you pass `--engine-version 0.3.89` (match the version
+  you play). `--engine-source DIR` uses a source folder you already have;
+  `--no-download` skips that text instead.
 - Dialogue and names come from your **imported ROM cache**, auto-detected at
   `%APPDATA%\LOVE\pokemon-love2d\red\data\generated` (run the game once with
   your ROM first). Use `--version blue|yellow` or `--cache DIR` to choose.
@@ -183,39 +190,72 @@ py tools\lpk.py template --game "C:\path\to\gen1recomp" -o es.csv
 
 Translate the `text` column, drop the file into `packs\es\`, done.
 
-**Split by game** (what most translators want): one sheet per game family,
-plus names and Pokédex sheets per generation, from every game you've imported:
+**Split by game and place** (what most translators want): every game you've
+imported, one folder per generation and one sheet per place, so you can
+translate a town, a route or a menu at a time:
 
 ```
 py tools\lpk.py split --game "C:\path\to\gen1recomp" -o packs\zsm --name "Bahasa Melayu" --author "You"
 ```
 
-| file | contents |
-|---|---|
-| `01_red_blue` | Red/Blue dialogue, menu & battle text, moves, items, trainer classes |
-| `02_yellow_exclusive` | only Yellow text that Red/Blue don't have |
-| `03_gold_silver` / `04_crystal_exclusive` | same, for Gen 2 |
-| `05_firered_leafgreen` | FireRed/LeafGreen |
-| `06_ruby_sapphire` / `07_emerald_exclusive` | Ruby/Sapphire, and Emerald-only text |
-| `08`–`10_names_genN` | Pokémon names per generation |
-| `11`–`13_dex_genN` | Pokédex category and entries; one row per distinct version text (`versions` column says which). Red/Blue and Yellow have different entries for every species |
+```
+packs\zsm\
+  Engine\            menus, battle and option text of the game engine (every game)
+  G1\                Red/Blue
+    Towns\           T01_pallet.csv … T11_saffron.csv
+    Routes\          R01.csv … R25.csv
+    Dungeons\        D01_viridian_forest.csv … D16_seafoam_islands.csv
+    System\          battle, items, PC, marts, Pokédex ratings, menus…
+    Names\  Pokedex\ intro.csv  shared.csv
+    Yellow\          only what Yellow adds, in the same folders
+  G2\                Gold/Silver (Johto towns T20–T31, routes R26–R46, dungeons D17–D37),
+    Crystal\         Kanto as in G1; Crystal's additions in Crystal\
+  G3\
+    FRLG\            FireRed/LeafGreen: Kanto as in G1, Sevii islands T41–T47, R411…, D411…
+    RSE\             Ruby/Sapphire: towns T101–T107, cities C101–C109, routes R101–R134,
+      Emerald\       underwater W124…, dungeons D101…; Emerald adds Frontier\ (F00–F07)
+    Shared\          text FireRed/LeafGreen and Ruby/Sapphire/Emerald have in common
+```
+
+A place's sheet holds every line spoken there, and its buildings come along:
+houses, shops and gyms go with their town, and gates go with their route. The
+Pokédex sheets keep one row per distinct version text (the `versions` column says
+which). Red/Blue and Yellow, for example, have different entries for every species.
+Gen 2 and Gen 3 lines are placed by following the games' map scripts, so `split`
+needs those games imported; a game it can't trace gets one sheet in its
+generation folder instead. `--layout flat` writes the original 13 sheets
+(`01_red_blue` … `13_dex_gen3`) straight in the pack folder.
 
 `split` also writes a **`pack.json`** with every setting filled in neutrally
 and a `_comment_…` line explaining each one (the mod ignores those). Set
 `--name "Bahasa Melayu"`, `--author` and optionally `--label` (the
 OPTIONS > LANGUAGE text; by default it's the name in plain A-Z). Point `-o`
-straight at `packs\<your_id>` and the folder is a ready-to-use pack. Re-running
-`split` after a game update refreshes the sheets but keeps your `pack.json`
-(`--force-pack-json` replaces it), and keeps every translation already in the
-sheets: rows are matched by kind, key and game, and anything that no longer
-matches a row is saved to `_orphaned\` (which the mod ignores) instead of lost.
+straight at `packs\<your_id>` and the folder is a ready-to-use pack.
+
+**Re-running `split`** after a game update refreshes the sheets and keeps
+your work:
+
+- every translation already in the pack, wherever it is (rows are matched by
+  kind, key and game);
+- rows you **moved** to another file stay there. In a file you made yourself,
+  `split` only refreshes the English of those rows and leaves everything else
+  in that file alone;
+- rows you **deleted** stay deleted. `--restore G1\01_red_blue.csv` brings
+  back what you deleted from one file, `--restore all` everything;
+- your `pack.json` (`--force-pack-json` replaces it).
+
+`split` keeps track of this in `_lpk\split.json` (don't edit it by hand).
+A translation that no longer matches any row is saved to `_orphaned\`
+instead of lost. A file `split` no longer writes (after a layout change, or when
+upgrading a flat pack) is moved to `_orphaned\_retired\<date>\` if it held any
+translation, once those translations are in their new files; untranslated ones
+are simply removed. The mod and `release` ignore every folder that starts
+with `_`.
 
 Dialogue is matched by its English, so a Gold/Silver translation also applies
 in Crystal wherever the line is identical, even though Crystal stores it at a
-different address. The exclusive sheets hold only what that adds. Copy the
-finished sheets into one pack folder; the `01_`…`13_` names keep them loading
-in the right order. Portable installs need only `--game`; otherwise add
-`--cache "%APPDATA%\LOVE\pokemon-love2d"`.
+different address. The exclusive sheets hold only what that adds. Portable
+installs need only `--game`; otherwise add `--cache "%APPDATA%\LOVE\pokemon-love2d"`.
 
 **Check a pack** (syntax, unknown ids, `%s` mismatches, missing `{CONTROL}`
 codes, overlong lines, the same key translated two ways, coverage):
@@ -264,7 +304,7 @@ deploy.py         copy the mod into a game install for testing
 **Try your changes in the game** without packaging:
 
 ```
-py deploy.py "K:\path\to\gen1recomp-win64"
+py deploy.py "C:\path\to\gen1recomp-win64"
 ```
 
 It copies the mod into `mods\easy_language_packs\`, leaving any packs you
