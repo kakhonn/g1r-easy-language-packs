@@ -180,7 +180,7 @@ class Basics(unittest.TestCase):
         self.assertEqual(lpk.ir_source(ir, "frlg"), "Hi {PLAYER}\v{B_ATK_NAME_WITH_PREFIX}\f")
 
     def test_option_label(self):
-        self.assertEqual(lpk.option_label("Bahasa Melayu"), "BAHASA MELAYU")
+        self.assertEqual(lpk.option_label("Español"), "ESPANOL")
         self.assertEqual(lpk.option_label("Português (Brasil)"), "PORTUGUES BRASIL")
         self.assertEqual(lpk.option_label("Español de México y Centroamérica"), "ESPANOL DE")
         self.assertEqual(lpk.option_label("日本語"), "MY LANGUAGE")
@@ -245,11 +245,11 @@ class Split(SplitCase):
     layout = "flat"
 
     def test_writes_every_sheet_and_pack_json(self):
-        self.assertEqual(self.split("--name", "Bahasa Melayu", "--author", "Tester"), 0)
+        self.assertEqual(self.split("--name", "Español", "--author", "Tester"), 0)
         for name, _ in lpk.SPLIT_FILES:
             self.assertTrue(os.path.isfile(os.path.join(self.out, name + ".csv")), name)
         meta = json.load(open(os.path.join(self.out, "pack.json"), encoding="utf-8"))
-        self.assertEqual((meta["name"], meta["label"], meta["author"]), ("Bahasa Melayu", "BAHASA MELAYU", "Tester"))
+        self.assertEqual((meta["name"], meta["label"], meta["author"]), ("Español", "ESPANOL", "Tester"))
         self.assertEqual((meta["font"], meta["extends"]), ("", ""))
 
     def test_engine_text_skips_the_launcher(self):
@@ -319,9 +319,9 @@ class Split(SplitCase):
         data = self.sheet("01_red_blue")
         for r in data:
             if r["key"] == "%s grew\\nto level %d!":
-                r["text"] = "%s naik ke\\ntahap %d!"
+                r["text"] = "¡%s subió\\nal nivel %d!"
             if r["english"] == "A SIGN":
-                r["text"] = "PAPAN TANDA"
+                r["text"] = "CARTEL"
         self.save(self.path("01_red_blue.csv"), data)
         self.assertEqual(quiet(lpk.main, ["check", self.out]), 0)
         dist = os.path.join(self.tmp, "dist")
@@ -380,11 +380,11 @@ class SplitLayout(SplitCase):
     def test_upgrading_a_flat_pack_keeps_its_translations(self):
         self.split("--layout", "flat")
         shutil.rmtree(os.path.join(self.out, "_lpk"))          # as an older lpk.py left it
-        self.translate("A SIGN", "PAPAN TANDA")
+        self.translate("A SIGN", "CARTEL")
         self.split()
         rel = self.find("A SIGN")
         self.assertTrue(rel.startswith("G1/"))
-        self.assertEqual([r["text"] for r in rows(self.path(rel)) if r["english"] == "A SIGN"], ["PAPAN TANDA"])
+        self.assertEqual([r["text"] for r in rows(self.path(rel)) if r["english"] == "A SIGN"], ["CARTEL"])
         self.assertFalse(os.path.exists(self.path("01_red_blue.csv")), "the old sheet left the pack")
         kept = glob.glob(os.path.join(self.out, "_orphaned", "_retired", "*", "01_red_blue.csv"))
         self.assertEqual(len(kept), 1, "a retired sheet with translations is kept in _orphaned/_retired")
@@ -395,14 +395,14 @@ class SplitLayout(SplitCase):
 
     def test_moved_rows_stay_where_the_translator_put_them(self):
         self.split()
-        self.translate("A SIGN", "PAPAN TANDA")
+        self.translate("A SIGN", "CARTEL")
         self.move("A SIGN", "G1/mine.csv")                       # into a file of their own
         self.move("TACKLE", "G1/Names/species.csv")              # into another split file
         self.split()
         self.split()                                             # and it stays that way
         self.assertEqual(self.find("A SIGN"), "G1/mine.csv")
         self.assertEqual([(r["english"], r["text"]) for r in rows(self.path("G1/mine.csv"))],
-                         [("A SIGN", "PAPAN TANDA")])
+                         [("A SIGN", "CARTEL")])
         self.assertEqual(self.find("TACKLE"), "G1/Names/species.csv")
         self.assertEqual(sorted(self.manifest()["pins"].values()), ["G1/Names/species.csv", "G1/mine.csv"])
 
