@@ -30,6 +30,7 @@ return function(mod)
   local Pack = loadModule("lib/pack.lua")
   local Hash = loadModule("lib/hash.lua")
   local Live = loadModule("lib/live.lua")
+  local G3text = loadModule("lib/g3text.lua")
   local GEN = "gen" .. tostring(mod.generation or 1)
 
   local fs = {
@@ -219,6 +220,86 @@ return function(mod)
     return touched
   end
 
+  -- ---- Gen 3 ------------------------------------------------------------------
+  -- FireRed/LeafGreen/Ruby/Sapphire/Emerald keep script text as segment lists
+  -- in the script bundle (data.gen3Text), read by both the script VM and
+  -- RomText, so translations are written there as segments.  Names live in
+  -- the game3 modules data.gen3Pokemon / gen3Items.  The sheets key species
+  -- and the Pokedex by national number, moves and items by their index.
+  local DEX3 = { dex_kind = "category", dex_text = "description", dex_text2 = "description2" }
+  local ENTRIES = "pokemon/pokedex/entries.lua"
+  local rseEntries -- the Ruby/Sapphire/Emerald Pokedex's entries (see below)
+
+  local function gen3View(g)
+    local d = g.data
+    local GameVersion = engine("src.core.GameVersion")
+    local version = GameVersion and GameVersion.get and GameVersion.get()
+    local dialect = G3text.DIALECT_OF[version] or "frlg"
+    local text = d.gen3Text
+    if type(text) ~= "table" then
+      local Space = engine("src.core.game3.scripting.space")
+      local ok, bundle = pcall(function() return Space.ensureBundle() end)
+      text = ok and type(bundle) == "table" and bundle.text or nil
+    end
+    if type(text) ~= "table" then return nil, "no script text loaded" end
+
+    local function dexEntries()
+      if dialect == "frlg" then
+        local Dex = engine("src.core.game3.pokedex_data")
+        if Dex and Dex.init then pcall(Dex.init) end
+        return Dex and Dex._entries
+      end
+      -- Ruby/Sapphire/Emerald's Pokedex screen reads its own private copy of
+      -- the entries through Mapsec.readLua; load one, translate that, and
+      -- hand it over when the screen asks
+      if not rseEntries then
+        local Mapsec = engine("src.ui.game3.rse.mapsec")
+        local read = Mapsec and Mapsec.readLua
+        if type(read) ~= "function" then return nil end
+        local ok, t = pcall(read, ENTRIES)
+        if not (ok and type(t) == "table") then return nil end
+        rseEntries = t
+        Mapsec.readLua = function(rel, ...)
+          if rel == ENTRIES then return rseEntries end
+          return read(rel, ...)
+        end
+      end
+      return rseEntries
+    end
+
+    -- the table and field a name or Pokedex row writes; false = no such
+    -- thing in Gen 3 (trainer classes, status labels)
+    local function slot(kind, id)
+      local P = d.gen3Pokemon
+      local num = tonumber(id)
+      if kind == "species" then
+        local names = P and P._names
+        num = num and P and P.speciesFromNational and P.speciesFromNational(num)
+        if num and type(names) == "table" and names[num] ~= nil then return names, num end
+      elseif kind == "moves" then
+        local names = P and P._moveNames
+        if num and type(names) == "table" and names[num] ~= nil then return names, num end
+      elseif kind == "items" then
+        local Items = d.gen3Items
+        if Items and Items.ensureLoaded then pcall(Items.ensureLoaded) end
+        local rows = Items and Items._byId
+        local row = num and type(rows) == "table" and rows[num]
+        if type(row) == "table" then return row, "name" end
+      elseif DEX3[kind] then
+        local entries = dexEntries()
+        local e = num and type(entries) == "table" and entries[num]
+        if type(e) == "table" then return e, DEX3[kind] end
+      else
+        return false
+      end
+      return nil
+    end
+
+    return { text = text, slot = slot,
+             source = function(ir) return G3text.source(ir, dialect) end,
+             parse = function(s) return G3text.parse(s, dialect) end }
+  end
+
   local fontTouched = false
   local function switchTo(id)
     if not (game and live) then return end
@@ -272,7 +353,23 @@ return function(mod)
       mod.log:warn("language pack: no game data to translate")
       return
     end
-    if not live then live = Live.new(game.data, GEN, Hash) end
+    if not live then
+      local g3, why
+      if GEN == "gen3" then
+        g3, why = gen3View(game)
+        if not g3 then mod.log:warn("language pack: Gen 3 dialogue unavailable (%s)", tostring(why)) end
+        -- reloading species data replaces the name tables: apply again
+        local P = game.data.gen3Pokemon
+        if g3 and P and type(P.onReload) == "function" then
+          P.onReload(function()
+            local id = current
+            current = nil
+            switchTo(id or chosen())
+          end, mod.id)
+        end
+      end
+      live = Live.new(game.data, GEN, Hash, g3)
+    end
     current = nil
     switchTo(chosen())
   end)

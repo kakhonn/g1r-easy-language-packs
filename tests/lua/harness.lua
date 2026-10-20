@@ -91,12 +91,14 @@ end
 -- this mod, e.g. packs/), mods (other mods: { [id] = { [path] = body } })
 function H.boot(data, opts)
   opts = opts or {}
+  -- Gen 3 picks its text dialect from the running version
+  if (opts.gen or 1) == 3 then require("src.core.GameVersion").set(opts.version or "firered") end
   local real = SaveData.loadOptions
   SaveData.loadOptions = function()
     return { modOptions = opts.language and { [H.ID] = { language = opts.language } } or {} }
   end
   local loader = Loader.new({ fs = memfs(modFiles(opts.extra, opts.mods)), generation = opts.gen or 1,
-                              version = opts.version or "red" })
+                              version = opts.version or ((opts.gen or 1) == 3 and "firered" or "red") })
   local G = { data = data, save = { options = { modOptions = {} } }, writes = 0 }
   G.writeOptions = function(self) self.writes = self.writes + 1 end
   G.mods = loader

@@ -147,6 +147,22 @@ class Basics(unittest.TestCase):
         self.assertEqual(lpk.fnv1a("a"), "e40c292c")
         self.assertEqual(lpk.fnv1a("foobar"), "bf9cf968")
 
+    def test_gen3_source_matches_the_mod(self):
+        # tests/lua/gen3_test.lua holds the same segments and expects the same
+        # strings and hashes from lib/g3text.lua: the dialogue keys depend on it
+        ir = [{"t": "text", "s": "Hi "}, {"t": "player"}, {"t": "text", "s": "! It's "}, {"t": "rival"},
+              {"t": "nl"}, {"t": "strvar", "n": 2}, {"t": "scroll"}, {"t": "ph", "code": 7}, {"t": "para"},
+              {"t": "bph", "code": 0x10}, {"t": "dynamic", "n": 0}, {"t": "ext", "cmd": 8, "args": [4]},
+              {"t": "tag", "tag": "{PKMN}"}, {"t": "ph", "code": 0x20}, {"t": "ph", "code": 8},
+              {"t": "eos"}, {"t": "text", "s": "after the end"}]
+        frlg = ("Hi {PLAYER}! It's {RIVAL}\n{STR_VAR_2}\v{VERSION}\f"
+                "{B_DEF_NAME_WITH_PREFIX}{DYNAMIC_0}{EXT_08_4}{PKMN}{PH_20}{MAGMA}")
+        self.assertEqual(lpk.ir_source(ir, "frlg"), frlg)
+        self.assertEqual(lpk.fnv1a(frlg), "4b914961")
+        self.assertEqual(lpk.fnv1a(lpk.ir_source(ir, "rs")), "5956c3d8")
+        self.assertEqual(lpk.fnv1a(lpk.ir_source(ir, "rse")), "a22dbba0")
+        self.assertEqual(lpk.ir_source([{"t": "ph", "code": 2, "name": ""}], "frlg"), "{STR_VAR_1}")
+
     def test_csv_escapes_round_trip(self):
         s = "line\nscroll\vpage\fback\\slash"
         self.assertEqual(lpk.csv_unescape(lpk.csv_escape(s)), s)

@@ -16,8 +16,8 @@ sheets, checks packs and strips ROM text for release.
 - Mod id `easy_language_packs`, name "Easy Language Packs", repo
   `kakhonn/g1r-easy-language-packs` (owner's handle: kakhonn). Version in
   `manifest.json`.
-- Supported in-game: Gen 1 and Gen 2. Gen 3 sheets are generated, but the mod
-  doesn't apply them yet (`manifest.json` games = gen1, gen2).
+- Supported in-game: Gen 1, Gen 2 and Gen 3 (`manifest.json` games = gen1,
+  gen2, gen3). Gen 3 has had the least play-testing.
 - The earlier build had id `language_pack`, and the manifest declares it as a
   conflict. Don't reuse that id.
 
@@ -28,6 +28,7 @@ main.lua            entry: pack list, LANGUAGE option + OPTIONS row, applies at 
 lib/pack.lua        reads pack folders (CSV/TSV/JSON, pack.json, extends, game column)
 lib/live.lua        applies a pack straight onto live game data; remembers originals; restore()
 lib/hash.lua        FNV-1a 32-bit -> 8 hex digits (must match lpk.fnv1a)
+lib/g3text.lua      Gen 3 text segments <-> the sheet's string (source() must match lpk.ir_source)
 lib/csv.lua, json.lua  pure-Lua parsers (the mod sandbox has neither)
 tools/lpk.py        template / split / check / release (Python 3 stdlib only, runs on Windows)
 tools/lpk_layout.py where split puts each row (the pack layout); imported by lpk.py
@@ -55,8 +56,10 @@ deploy.py           copy the mod into a game install for testing
    or key starting `#` unless it's `#` + 8 hex), `game` parsing, blank
    `extends` ignored, JSON `\v` accepted, the FNV-1a hash, file load order
    (recursive, `_`/`.` folders skipped, sorted by whole relative path so
-   `dex.csv` < `dex/a.csv`). `tests/test_lpk.py` and the Lua tests pin the
-   hash to published FNV vectors and both check the file order.
+   `dex.csv` < `dex/a.csv`), and Gen 3 `ir_source()` = `g3text.source()`
+   (the Gen 3 dialogue keys are its hash). `tests/test_lpk.py` and the Lua
+   tests pin the hash to published FNV vectors, check the file order, and
+   share one Gen 3 segment list with the same expected strings and hashes.
 3. **ENGLISH must restore the original data exactly.** `live.lua` records
    every slot before its first write; the live tests deep-compare all data
    after switching back. Any new kind must go through `Live:set`.
@@ -128,6 +131,29 @@ whole mod.
 | trainers | `data.trainers[id].name` | `data.gen2Trainers.classes[id].name` |
 | statuses | `data.statuses[id].label/hudLabel` (engine registers built-ins; don't pre-fill in tests) | n/a |
 | dex_kind/dex_text/dex_text2 | `data.pokemon[id].dexEntry.kind`; **text is a label**: the screen reads `data.text[dexEntry.text]` (e.g. `_MewDexEntry`), so dex_text writes through the label | `data.gen2Pokedex.entries[id].kind/text/text2` (what the #DEX screen reads) |
+
+**Gen 3** (`main.lua` `gen3View`, `lib/live.lua` with a `g3` view):
+- **Dialogue:** the script bundle's `text` (`data.gen3Text` = `Space.bundle.text`,
+  label -> segment list). The script VM reads it directly (`vm:getText`), and
+  `RomText` falls back to it after `RomText.overrides`, so translations are
+  written there, as segments from `g3text.parse`. `#hash` = FNV of
+  `g3text.source(original)`, in the version's dialect (frlg/rs/rse, from
+  `GameVersion.get()`). Checked against real imports: every FRLG/RS/E
+  dialogue row in the reference pack found its labels.
+- **Names:**
+  - species: `gen3Pokemon._names[speciesFromNational(n)]` (key = national
+    `025`); reloads re-apply through `Pokemon.onReload`.
+  - moves: `gen3Pokemon._moveNames[n]`.
+  - items: `gen3Items._byId[n].name`.
+- **Pokedex:** FRLG reads `pokedex_data._entries[n]` (category, description,
+  description2). RSE's Pokedex screen loads a private copy through
+  `Mapsec.readLua("pokemon/pokedex/entries.lua")`, so the mod loads one,
+  translates it, and wraps `readLua` to hand it over.
+- **Engine text:** the shared `data.strings` catalog, as in Gen 1/2.
+- **Switching:** Gen 3's OPTIONS has no `ui.options.rows` hook, so the
+  language is picked in the Mod Manager (`mod.options_changed`).
+- **Font:** `data.font` isn't used in Gen 3. Its own font (`frlg_font`) has
+  the European Latin glyphs and kana; other characters draw blank.
 
 **Keys and scoping.**
 - `#<hash>` dialogue key = apply to every dialogue line in the running game
@@ -239,7 +265,7 @@ checkout: release builds have no `tests/`, and the harness needs the engine's
 `tests/love_stub.lua`.
 
 The mod tracks the latest G1R release, so test against a current engine and
-fix the mod when the engine moves. Last full run: 135 Lua checks + 38 Python
+fix the mod when the engine moves. Last full run: 177 Lua checks + 39 Python
 tests, all passing, against engine `dev` 48a7139 (2026-10-20).
 
 ## Releasing
@@ -266,13 +292,7 @@ enables update checks in the game's launcher, which needs a **public** repo
 
 1. **In-game play-test pass**: never done in a running game. Watch the Gen 2
    OPTIONS row, live pixel-font switch, Gen 2 trainer renames, naming grid.
-2. **Gen 3 runtime support** (FireRed/LeafGreen, Ruby/Sapphire/Emerald):
-   sheets already exist with `#hash` dialogue and `game=gen3`. Gen 3 text is
-   label-keyed IR; engine routes `rom_text` to `gen3RomText` and translates
-   via `Strings.translateLabel`/`RomText`. Note FRLG and RS sheets share ~2,200
-   identical lines (same keys): `check` warns when they're translated
-   differently.
-3. **Title graphics**: an `images/` folder in packs. Gen 1 TitleState already
+2. **Title graphics**: an `images/` folder in packs. Gen 1 TitleState already
    supports a continuous `versionRibbon` (via `data.field.boot.title`, drawn
    centered as one piece: the hook is meant for translations); vanilla draws
    fragments at fixed x. Gen 2's title is one composed `title_screen.png`
@@ -281,6 +301,9 @@ enables update checks in the game's launcher, which needs a **public** repo
    (`replace_logo: false` default) plus a player-side toggle, and skip if
    another mod already replaced it. Live swap: find the TitleState on
    `game.stack.states`, replace its image fields, flush Assets.
+3. **Gen 3 gaps:** ability names (`gen3Pokemon._abilityNames`), trainer
+   classes, a LANGUAGE row in Gen 3's OPTIONS (no `ui.options.rows` hook
+   there; the engine would need one), `check` line widths for Gen 3 boxes.
 4. Launcher translation (write `lang/strings.lua` from the active pack);
    completion % in the LANGUAGE row; translator workbook (xlsx with length
    checks); text-box preview page; `lpk.py draft` (local-model pre-fill,

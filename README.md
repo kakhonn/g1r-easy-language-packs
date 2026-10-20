@@ -1,6 +1,7 @@
 # Easy Language Packs
 
-Play Pokémon Red/Blue/Yellow and Gold/Silver/Crystal in your own language on
+Play Pokémon Red/Blue/Yellow, Gold/Silver/Crystal, FireRed/LeafGreen and
+Ruby/Sapphire/Emerald in your own language on
 [G1R Deluxe / Gen1Recomp](https://github.com/bryanthaboi/gen1recomp).
 Translations are plain **CSV or JSON files**, which you can edit in Excel,
 LibreOffice or Google Sheets. Pick a language under **OPTIONS > LANGUAGE**
@@ -149,12 +150,12 @@ Every entry has a **kind**, a **key**, and your **text**. Empty text means
 |---|---|---|
 | `dialogue` | the script text label, **or** `#` + the English line's fingerprint (what `split` writes: applies to every line in the game with that exact English) | `_PalletTownSignText`, `#7d87deb6` |
 | `strings` | the engine's English text itself (menus, battle messages, prompts). Prefix `context\|` for the few context-split ones | `%s wants\nto fight!` |
-| `species` | species id | `PIKACHU` |
-| `moves` | move id | `TACKLE` |
-| `items` | item id | `POTION` |
-| `trainers` | trainer class id (the template lists them) | |
-| `statuses` / `status_hud` | `SLP` `PSN` `BRN` `FRZ` `PAR` | `PSN` |
-| `dex_kind` / `dex_text` / `dex_text2` | species id (Pokédex category / entry text) | `PIKACHU` |
+| `species` | species id; in Gen 3 its national number | `PIKACHU`, `025` |
+| `moves` | move id; in Gen 3 its number | `TACKLE`, `33` |
+| `items` | item id; in Gen 3 its number | `POTION`, `13` |
+| `trainers` | trainer class id (the template lists them; not in Gen 3) | |
+| `statuses` / `status_hud` | `SLP` `PSN` `BRN` `FRZ` `PAR` (Gen 1) | `PSN` |
+| `dex_kind` / `dex_text` / `dex_text2` | species id (Pokédex category / entry text); in Gen 3 the number `split` gives it | `PIKACHU`, `025` |
 
 Aliases work too (`text`, `ui`, `pokemon`, `move`, `item_names`, …).
 Unknown ids are skipped with a log warning rather than creating broken records.
@@ -179,7 +180,23 @@ Unknown ids are skipped with a log warning rather than creating broken records.
 | new page | (pokered `para`) | `\f` | `\f` |
 | tokens | player/rival names etc. | `{PLAYER}` `{RIVAL}` … keep them as-is | same |
 
-The text box fits **18 glyphs per line**. Your own line breaks are kept exactly.
+The text box fits **18 glyphs per line** in Gen 1 and 2. Your own line breaks
+are kept exactly.
+
+Gen 3 lines carry more tokens: `{STR_VAR_1}` (a name or number the script
+fills in), `{B_…}` in battle text, and `{EXT_…}` control codes (colors,
+pauses, sounds). Keep each one; you can move it within the line.
+
+### Gen 3 (FireRed/LeafGreen, Ruby/Sapphire/Emerald)
+
+- Pick the language under **OPTIONS > MODS > Easy Language Packs**: Gen 3's
+  OPTIONS screen has no room for a LANGUAGE row.
+- Gen 3 draws with its own font, which has the European letters (À–ü, Ñ, ¿,
+  ¡, ß, Œ, º/ª) and Japanese kana. `"font"` in `pack.json` doesn't apply
+  there, and other characters show as blanks.
+- Dialogue, Pokémon, move and item names, the Pokédex and the engine's own
+  menus and battle messages are translated. Ability and trainer class names
+  aren't yet.
 
 ## File formats
 
@@ -355,9 +372,9 @@ py tools\lpk.py release packs\es -o dist
   "PATCHES ENGINE CODE"): switching live means editing the running game's
   text tables and reloading its text catalog and font, which the content
   registries can only do at boot.
-- Supported in-game: Red/Blue/Yellow and Gold/Silver/Crystal. The Gen 3 sheets
-  (FireRed/LeafGreen, Ruby/Sapphire/Emerald) can be translated now, but the mod
-  doesn't apply them in those games yet.
+- Supported in-game: Red/Blue/Yellow, Gold/Silver/Crystal, FireRed/LeafGreen
+  and Ruby/Sapphire/Emerald. Gen 3 support is new and hasn't been play-tested
+  much yet.
 - Gen 2 text carries control codes like `{DONE}`, `{PROMPT}` and `<NEXT>` (a
   Pokédex line break). Keep every one; `check` flags any that go missing.
 
