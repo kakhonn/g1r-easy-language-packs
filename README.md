@@ -272,11 +272,11 @@ imported, one folder per generation and one sheet per place, so you can
 translate a town, a route or a menu at a time:
 
 ```
-py tools\lpk.py split --game "C:\path\to\gen1recomp" -o packs\zsm --name "Bahasa Melayu" --author "You"
+py tools\lpk.py split --game "C:\path\to\gen1recomp" -o packs\es --name "Español" --author "You"
 ```
 
 ```
-packs\zsm\
+packs\es\
   Engine\            menus, battle and option text of the game engine (every game)
   G1\                Red/Blue
     Towns\           T01_pallet.csv … T11_saffron.csv
@@ -305,8 +305,9 @@ generation folder instead. `--layout flat` writes the original 13 sheets
 
 `split` also writes a **`pack.json`** with every setting filled in neutrally
 and a `_comment_…` line explaining each one (the mod ignores those). Set
-`--name "Bahasa Melayu"`, `--author` and optionally `--label` (the
-OPTIONS > LANGUAGE text; by default it's the name in plain A-Z). Point `-o`
+`--name "Español"`, `--author` and optionally `--label` (the
+OPTIONS > LANGUAGE text; by default it's the name in plain A-Z, so
+`ESPANOL`). Point `-o`
 straight at `packs\<your_id>` and the folder is a ready-to-use pack.
 
 **Re-running `split`** after a game update refreshes the sheets and keeps
